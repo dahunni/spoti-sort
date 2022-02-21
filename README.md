@@ -25,9 +25,9 @@
 - [About](#about)
 - [Getting Started](#getting_started)
 - [Built Using](#built_using)
-- [Contributing](../CONTRIBUTING.md)
 - [Authors](#authors)
 - [Acknowledgments](#acknowledgement)
+- [Todo](#todo)
 
 ## 🧐 About <a name = "about"></a>
 
@@ -77,6 +77,15 @@ PLAYLIST_IDS
 <i>Comma separated playlist ids (with space!): xxxxxxxxxxxx, xxxxxxxxxxx</i>
 <br></br>
 
+## Authenticate your session
+
+open the dockers shell (docker exec -it ...) and run <i>python firstrun.py</i>
+Restart the container after this is done
+
+
+## Todo <a name = "todo"></a>
+- duplicate songs in a playlist cause an endless loop
+- cron output is not written to the docker log after the firstrun script is run
 
 
 ## ⛏️ Built Using <a name = "built_using"></a>
