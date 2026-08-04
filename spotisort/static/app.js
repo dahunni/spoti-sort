@@ -166,6 +166,22 @@
   const entriesFromSelection = () =>
     [...state.selected].map(([id, order]) => ({ id, order }));
 
+  function renderTeslaLink(st) {
+    const on = !!st.tesla_url;
+    $("#tesla-on").hidden = !on;
+    $("#tesla-off").hidden = on;
+    if (on) {
+      $("#tesla-url").textContent = st.tesla_url;
+      $("#tesla-open").href = st.tesla_url;
+    }
+    // The link is only reachable from the car if the base address is right, and the
+    // loopback default never is.
+    const loopback = /^https?:\/\/(127\.0\.0\.1|localhost)\b/.test(st.tesla_url || "");
+    $("#tesla-hint").textContent = on && loopback
+      ? "This link points at 127.0.0.1, which the car can't reach. Set the address above to this machine's LAN address or hostname."
+      : "";
+  }
+
   function renderAccount() {
     const st = state.status;
     const box = $("#account");
@@ -194,6 +210,8 @@
     $("#interval").value = String(st.interval_minutes);
     $("#default-order").value = st.default_order;
     $("#run-on-start").checked = !!st.run_on_start;
+    $("#reauth").hidden = !st.connected || !(st.missing_scopes || []).length;
+    renderTeslaLink(st);
     renderAccount();
     renderLastRun();
     tick();
@@ -226,6 +244,34 @@
       }
     }
   });
+
+  // Public address — lives on the setup card, so it must work before connecting.
+  const publicUrlBtn = $("#save-public-url");
+  if (publicUrlBtn) {
+    publicUrlBtn.addEventListener("click", async () => {
+      try {
+        await api("/api/settings", { method: "POST", body: { public_url: $("#public-url").value } });
+        location.reload();  // the redirect URI shown above is rendered server-side
+      } catch (err) { toast(err.message, true); }
+    });
+  }
+
+  const teslaAction = async (action, confirmText) => {
+    if (confirmText && !confirm(confirmText)) return;
+    try {
+      const data = await api("/api/tesla-link", { method: "POST", body: { action } });
+      state.status.tesla_url = data.tesla_url;
+      renderTeslaLink(state.status);
+      toast(data.tesla_url ? "Link ready" : "Link turned off");
+    } catch (err) { toast(err.message, true); }
+  };
+  if ($("#tesla-enable")) {
+    $("#tesla-enable").addEventListener("click", () => teslaAction("enable"));
+    $("#tesla-regen").addEventListener("click", () =>
+      teslaAction("regenerate", "Generate a new link? The one saved in the car will stop working."));
+    $("#tesla-disable").addEventListener("click", () =>
+      teslaAction("disable", "Turn off the Tesla page? The saved link will stop working."));
+  }
 
   const credForm = $("#credentials-form");
   if (credForm) {

@@ -12,8 +12,10 @@ services:
       # Optional: everything below can also be set in the web UI.
       # - CLIENT_ID=
       # - CLIENT_SECRET=
-      # Set this when you reach the UI on anything other than http://127.0.0.1:8080,
-      # and add the identical value to your Spotify app's redirect URIs.
-      # - REDIRECT_URI=http://192.168.1.50:8080/callback
+      # Set this when you reach the UI on anything other than http://127.0.0.1:8080.
+      # The redirect URI is derived from it; add that to your Spotify app.
+      # - PUBLIC_URL=http://192.168.1.50:8080
+      # Only needed if the callback address differs from PUBLIC_URL:
+      # - REDIRECT_URI=
       # - UI_PASSWORD=
       - TZ=Europe/Berlin

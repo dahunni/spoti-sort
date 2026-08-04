@@ -14,6 +14,7 @@ import os
 import secrets
 import threading
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from .sorter import NEWEST_FIRST, OLDEST_FIRST
 
@@ -29,6 +30,11 @@ DEFAULTS: Dict[str, Any] = {
     "client_id": "",
     "client_secret": "",
     "run_on_start": True,
+    # Address this UI is actually reached on, e.g. "http://192.168.1.50:8080".
+    # Drives both the OAuth redirect URI and the Tesla page link.
+    "public_url": "",
+    # Bearer token embedded in the Tesla page URL so the car can bookmark it.
+    "tesla_token": "",
 }
 
 ORDERS = (NEWEST_FIRST, OLDEST_FIRST)
@@ -149,9 +155,49 @@ class Config:
         return bool(self._data["run_on_start"])
 
     @property
+    def public_url(self) -> str:
+        """Base address the UI is reached on, without a trailing slash."""
+        return _env("PUBLIC_URL").rstrip("/") or str(self._data["public_url"]).rstrip("/")
+
+    @property
+    def base_url(self) -> str:
+        return self.public_url or "http://127.0.0.1:%d" % self.port
+
+    @property
     def redirect_uri(self) -> str:
-        # Must match the Spotify dashboard entry byte for byte, trailing slash included.
-        return _env("REDIRECT_URI") or "http://127.0.0.1:%d/callback" % self.port
+        # Must match the Spotify dashboard entry byte for byte. REDIRECT_URI stays
+        # available for the case where the callback address differs from the base
+        # address (an odd reverse-proxy setup, say).
+        return _env("REDIRECT_URI") or self.base_url + "/callback"
+
+    @property
+    def redirect_uri_from_env(self) -> bool:
+        return bool(_env("REDIRECT_URI"))
+
+    @property
+    def public_url_from_env(self) -> bool:
+        return bool(_env("PUBLIC_URL"))
+
+    # -- tesla page --------------------------------------------------------
+
+    @property
+    def tesla_token(self) -> str:
+        return str(self._data["tesla_token"])
+
+    @property
+    def tesla_url(self) -> str:
+        token = self.tesla_token
+        return self.base_url + "/tesla/" + token if token else ""
+
+    def new_tesla_token(self) -> str:
+        # url-safe and long enough that guessing it is not a concern; it is the
+        # only credential the car presents.
+        token = secrets.token_urlsafe(24)
+        self.update(tesla_token=token)
+        return token
+
+    def clear_tesla_token(self) -> None:
+        self.update(tesla_token="")
 
     @property
     def port(self) -> int:
@@ -283,6 +329,30 @@ def normalise_entries(raw: Any, default_order: str) -> List[Dict[str, str]]:
             seen.add(playlist_id)
             out.append({"id": playlist_id, "order": order})
     return out
+
+
+def clean_public_url(raw: str) -> str:
+    """Normalise a user-typed base address, or raise ValueError with the reason.
+
+    Spotify matches redirect URIs byte for byte, so a stray trailing slash or a
+    missing scheme is a real failure and worth rejecting up front rather than at
+    the end of the authorisation round trip.
+    """
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    if "://" not in value:
+        value = "http://" + value
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("address must start with http:// or https://")
+    if not parsed.netloc:
+        raise ValueError("address needs a hostname, e.g. http://192.168.1.50:8080")
+    if parsed.query or parsed.fragment:
+        raise ValueError("address must not contain a query string or fragment")
+    # Trim the path rather than the whole string, so "http://" fails the netloc
+    # check above instead of being silently repaired into something meaningless.
+    return "%s://%s%s" % (parsed.scheme, parsed.netloc, parsed.path.rstrip("/"))
 
 
 def clamp_interval(minutes: int) -> int:

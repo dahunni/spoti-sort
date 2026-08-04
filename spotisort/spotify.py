@@ -16,11 +16,23 @@ from .sorter import ITEM_FIELDS, PlaylistResult, RunResult, apply_move, plan_mov
 
 log = logging.getLogger(__name__)
 
-# Least privilege: we reorder playlists and nothing else. The original code also
-# asked for `user-library-modify`, which it never used.
-SCOPE = "playlist-read-private playlist-read-collaborative playlist-modify-private playlist-modify-public"
+# Least privilege: read playlists, reorder and add to them, and see what is playing
+# (for the Tesla page). The original code also asked for `user-library-modify`,
+# which it never used.
+SORT_SCOPES = ("playlist-read-private playlist-read-collaborative "
+               "playlist-modify-private playlist-modify-public")
+NOW_PLAYING_SCOPES = "user-read-currently-playing user-read-playback-state"
+SCOPE = SORT_SCOPES + " " + NOW_PLAYING_SCOPES
 
 MAX_ATTEMPTS = 5
+
+
+def missing_scopes(token: Optional[Dict[str, Any]]) -> List[str]:
+    """Scopes we now ask for that an existing cached token predates."""
+    if not token:
+        return SCOPE.split()
+    granted = set((token.get("scope") or "").replace(",", " ").split())
+    return [s for s in SCOPE.split() if s not in granted]
 
 
 class NotAuthenticated(Exception):
@@ -109,6 +121,46 @@ class SpotifyClient:
             if not page.get("items"):
                 break
         return out
+
+    def now_playing(self) -> Dict[str, Any]:
+        """The currently playing item, flattened for the Tesla page.
+
+        One API call. Returns ``{"playing": False}`` when nothing is active, which
+        is also what a 204 from Spotify looks like through spotipy.
+        """
+        current = _retry(
+            lambda: self.sp.current_playback(additional_types="track,episode"),
+            "current playback",
+        )
+        item = (current or {}).get("item")
+        if not current or not item:
+            return {"playing": False}
+
+        images = ((item.get("album") or {}).get("images")
+                  or (item.get("show") or {}).get("images") or [])
+        artists = [a.get("name") for a in (item.get("artists") or []) if a.get("name")]
+        if not artists and item.get("show"):
+            artists = [item["show"].get("name") or ""]
+
+        return {
+            "playing": True,
+            "is_playing": bool(current.get("is_playing")),
+            "uri": item.get("uri"),
+            "id": item.get("id"),
+            "name": item.get("name") or "",
+            "artist": ", ".join(artists),
+            "album": (item.get("album") or {}).get("name") or "",
+            # images are ordered widest first; index 1 is the ~300px copy
+            "image": images[min(1, len(images) - 1)]["url"] if images else None,
+            "progress_ms": current.get("progress_ms") or 0,
+            "duration_ms": item.get("duration_ms") or 0,
+            # Local files have no uri Spotify will accept back into a playlist.
+            "addable": bool(item.get("uri")) and not item.get("is_local"),
+        }
+
+    def add_to_playlist(self, playlist_id: str, uri: str) -> None:
+        _retry(lambda: self.sp.playlist_add_items(playlist_id, [uri]),
+               "add to %s" % playlist_id)
 
     def playlist_meta(self, playlist_id: str) -> Dict[str, Any]:
         return _retry(

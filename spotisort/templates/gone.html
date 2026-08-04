@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Not found · spoti-sort{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h2>Not found</h2>
+  <p class="muted">This link doesn't exist. If it's a saved Tesla link, it may have been regenerated or turned off — open spoti-sort and copy the current one.</p>
+  <a class="btn primary" href="{{ url_for('index') }}">Go to spoti-sort</a>
+</section>
+{% endblock %}

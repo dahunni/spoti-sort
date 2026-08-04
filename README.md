@@ -23,6 +23,7 @@ like the one in a Tesla.
 - [About](#about)
 - [Getting started](#getting_started)
 - [Configuration](#configuration)
+- [The Tesla page](#tesla)
 - [How the sorting works](#how)
 - [Development](#development)
 - [Built using](#built_using)
@@ -78,9 +79,10 @@ Copy the Client ID and secret into the UI (or set them as environment variables)
 **Authorise with Spotify**, and pick your playlists. That's it — no shell, no manual
 first-run script.
 
-> **Reaching the UI on another address?** If you browse to `http://192.168.1.50:8080`
-> or through a reverse proxy, set `REDIRECT_URI` to that address plus `/callback` and add
-> the identical value to your Spotify app. The UI always displays the value in use.
+> **Reaching the UI on another address?** If you browse to `http://192.168.1.50:8080` or
+> through a reverse proxy, type that address into the **address** field in step 2 of the
+> setup card — the redirect URI below it updates to match, and that's the value to paste
+> into Spotify. `PUBLIC_URL` does the same from the environment.
 
 ## ⚙️ Configuration <a name="configuration"></a>
 
@@ -91,7 +93,8 @@ precedence where both exist.
 | --- | --- | --- |
 | `CLIENT_ID` | – | Spotify app client ID. Settable in the UI instead. |
 | `CLIENT_SECRET` | – | Spotify app client secret. Settable in the UI instead. |
-| `REDIRECT_URI` | `http://127.0.0.1:$PORT/callback` | Must match the Spotify app exactly. |
+| `PUBLIC_URL` | – | Address the UI is actually reached on, e.g. `http://192.168.1.50:8080`. Settable in the UI instead. Drives the redirect URI and the Tesla link. |
+| `REDIRECT_URI` | `$PUBLIC_URL/callback` | Only needed when the callback address differs from `PUBLIC_URL`. Must match the Spotify app exactly. |
 | `PORT` | `8080` | Port the UI listens on. |
 | `HOST` | `0.0.0.0` | Bind address. |
 | `CONFIG_DIR` | `/config` | Where settings and the token are stored. |
@@ -105,7 +108,49 @@ precedence where both exist.
 
 The UI has no authentication unless you set `UI_PASSWORD`, and anyone who reaches it can
 reorder your playlists. Keep it on your LAN, or set a password before putting it behind a
-reverse proxy.
+reverse proxy. The [Tesla page](#tesla) is authenticated by its own link instead, and
+`UI_PASSWORD` does not apply to it — that's what lets the car use it.
+
+## 🚗 The Tesla page <a name="tesla"></a>
+
+A single bookmarkable page for the car. It shows what's playing and adds it to one of your
+enabled playlists with one tap — useful because the Tesla player can't add to a playlist
+at all.
+
+Open **Tesla page → Create link** in the UI and bookmark the resulting URL in the car's
+browser. The link contains its own access key, so the car never sees your Spotify login
+and never has to sign in — but that also means **anyone with the link can use it**. It is
+deliberately narrow: it can read what's playing and append to the playlists you've already
+enabled, and nothing else. It cannot change settings, reach your other playlists, remove
+tracks, or see your credentials. **Regenerate** invalidates the old link; **Turn off**
+disables the page entirely.
+
+Set the public address first, or the link will point at `127.0.0.1`, which the car can't
+reach. The UI warns you when that's the case.
+
+Reading playback needs two permissions that earlier versions didn't request. If you set
+spoti-sort up before this feature existed, the UI shows a **re-authorise** prompt — sorting
+keeps working until you do, the Tesla page doesn't.
+
+### API usage
+
+Roughly: one call every 5 seconds while the page is open and something is playing, plus
+one per track you add.
+
+That's well inside Spotify's limits, and the page is built not to waste calls — the server
+collapses all viewers into at most one upstream request every 4 seconds, polling drops to
+one call per 20 seconds when playback is paused or idle, and stops entirely when the tab
+isn't visible. The progress bar animates locally rather than polling for it. Leaving the
+page open in a parked car costs nothing.
+
+Duplicate protection is local: adding the same track to the same playlist twice within 15
+minutes is refused without an API call, which covers the realistic case of double-tapping
+on a touchscreen. Re-adding a track you added months ago isn't detected — that would mean
+reading the whole playlist on every tap. A stray duplicate is harmless anyway, since the
+sorter handles duplicates correctly.
+
+> Use it parked or hand it to a passenger. Adding a song is one tap, but reading a screen
+> while driving isn't the point of this.
 
 ## 🔍 How the sorting works <a name="how"></a>
 

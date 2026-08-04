@@ -1,0 +1,100 @@
+/* Deliberately dark and fixed: this runs on a car screen, often at night, and the
+   Tesla browser has no theme signal worth reacting to. Touch targets are sized for
+   a hand reaching sideways, not a mouse. */
+
+:root {
+  --bg: #0b0d10;
+  --panel: #191d23;
+  --panel-2: #232830;
+  --text: #f2f5f8;
+  --muted: #9aa5b4;
+  --accent: #1ed760;
+  --accent-ink: #06210f;
+  --danger: #ff6b6b;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 17px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+body { overflow-x: hidden; }
+
+#app {
+  max-width: 900px; margin: 0 auto; padding: 24px 22px 32px;
+  min-height: 100%; display: flex; flex-direction: column; justify-content: center;
+}
+
+/* idle */
+.idle { text-align: center; padding: 40px 0; }
+.idle-icon {
+  width: 96px; height: 96px; margin: 0 auto 20px; border-radius: 50%;
+  background: var(--panel); display: grid; place-items: center;
+  font-size: 42px; color: var(--muted);
+}
+.idle h1 { font-size: 26px; margin: 0 0 8px; }
+.idle p { color: var(--muted); margin: 0; font-size: 17px; }
+.idle.error .idle-icon { color: var(--danger); }
+
+/* now playing */
+#player { display: flex; flex-direction: column; gap: 22px; }
+.art-wrap { display: flex; justify-content: center; }
+#art, .art-fallback {
+  width: 200px; height: 200px; border-radius: 16px; object-fit: cover;
+  background: var(--panel); box-shadow: 0 12px 40px rgba(0,0,0,.5);
+}
+.art-fallback { display: grid; place-items: center; font-size: 64px; color: var(--muted); }
+
+.meta { text-align: center; }
+.meta h1 {
+  font-size: 27px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -.02em;
+  overflow-wrap: anywhere;
+}
+.meta p { font-size: 19px; color: var(--muted); margin: 0 0 14px; overflow-wrap: anywhere; }
+.bar { height: 4px; border-radius: 2px; background: var(--panel-2); overflow: hidden; }
+#bar-fill { height: 100%; width: 0; background: var(--accent); transition: width .9s linear; }
+
+/* playlist buttons */
+.targets { display: grid; gap: 12px; }
+.target {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  width: 100%; min-height: 68px; padding: 14px 20px; text-align: left;
+  font: inherit; font-size: 19px; font-weight: 600; color: var(--text);
+  background: var(--panel); border: 2px solid transparent; border-radius: 14px;
+  cursor: pointer; transition: background .12s, border-color .12s, transform .08s;
+}
+.target:active { transform: scale(.985); background: var(--panel-2); }
+.target .tick { font-size: 22px; color: var(--accent); opacity: 0; flex: none; }
+.target.done { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); }
+.target.done .tick { opacity: 1; }
+.target.busy { opacity: .55; }
+.target[disabled] { cursor: default; }
+.target .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.note { text-align: center; color: var(--muted); font-size: 15px; margin: 0; min-height: 20px; }
+
+/* flash */
+.flash {
+  position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+  background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 17px;
+  padding: 13px 26px; border-radius: 999px; box-shadow: 0 8px 30px rgba(0,0,0,.5);
+  max-width: 90vw; text-align: center;
+}
+.flash.bad { background: var(--danger); color: #fff; }
+
+/* Wide-and-short car screens: art beside the text rather than stacked. */
+@media (min-width: 700px) and (max-height: 620px) {
+  #player { display: grid; grid-template-columns: 180px 1fr; align-items: center; column-gap: 26px; }
+  .art-wrap { grid-row: span 2; }
+  #art, .art-fallback { width: 180px; height: 180px; }
+  .meta { text-align: left; }
+  .targets { grid-column: 2; }
+  .note { grid-column: 1 / -1; }
+}
+@media (min-width: 640px) {
+  .targets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .targets:has(> :only-child) { grid-template-columns: 1fr; }
+}

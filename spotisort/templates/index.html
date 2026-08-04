@@ -23,9 +23,17 @@
   <p>Spotify only lets a program touch your playlists through an app that <em>you</em> own. It takes a minute and stays entirely in your account.</p>
   <ol class="steps">
     <li>Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer">Spotify developer dashboard</a> and click <b>Create app</b>. Name it anything.</li>
-    <li>Add this exact <b>Redirect URI</b> — it must match character for character, trailing slash included:
+    <li>Check the address you reach this page on. If it isn't the one below, correct it here first — Spotify compares redirect URIs character for character.
+      <div class="urlrow">
+        <input type="text" id="public-url" placeholder="http://127.0.0.1:8080" value="{{ status.public_url }}"
+               autocomplete="off" spellcheck="false" {% if status.public_url_from_env %}disabled{% endif %}>
+        <button class="btn ghost small" id="save-public-url" {% if status.public_url_from_env %}disabled{% endif %}>Save</button>
+      </div>
+      <span class="hint">Hostname or IP with the port, no trailing path — for example <code>http://192.168.1.50:8080</code> or <code>https://spoti.example.com</code>. Leave empty for the default.</span>
+    </li>
+    <li>Add this exact <b>Redirect URI</b> to the Spotify app:
       <div class="copyrow"><code id="redirect-uri">{{ status.redirect_uri }}</code><button class="btn ghost small" data-copy="#redirect-uri">Copy</button></div>
-      <span class="hint">Reaching this UI on another address? Set the <code>REDIRECT_URI</code> variable to that address plus <code>/callback</code>, and use the same value here.</span>
+      {% if status.redirect_uri_from_env %}<span class="hint">Fixed by the <code>REDIRECT_URI</code> variable.</span>{% endif %}
     </li>
     <li>Tick <b>Web API</b>, save, then open <b>Settings</b> to reveal the Client ID and Client secret.</li>
   </ol>
@@ -53,6 +61,14 @@
 
 <!-- ── Dashboard ───────────────────────────────────────────────────── -->
 <div id="dashboard" {% if not status.connected %}hidden{% endif %}>
+
+  <section class="card" id="reauth" hidden>
+    <p class="alert error" style="margin-bottom:12px">
+      <b>New permission needed.</b> Reading what's currently playing was added after you
+      authorised. Sorting keeps working; the Tesla page won't until you re-authorise.
+    </p>
+    <a class="btn primary" href="{{ url_for('connect') }}">Re-authorise with Spotify</a>
+  </section>
 
   <section class="card status-card">
     <div class="status-main">
@@ -112,6 +128,29 @@
       </label>
     </div>
     <label class="check"><input type="checkbox" id="run-on-start"> Sort once at container start</label>
+  </section>
+
+  <section class="card">
+    <h2>Tesla page</h2>
+    <p class="muted">A single bookmarkable page for the car: it shows what's playing and adds it to one of your enabled playlists with one tap. The link carries its own access key, so the car never has to log in.</p>
+
+    <div id="tesla-off" hidden>
+      <button class="btn primary" id="tesla-enable">Create link</button>
+    </div>
+
+    <div id="tesla-on" hidden>
+      <div class="copyrow">
+        <code id="tesla-url"></code>
+        <button class="btn ghost small" data-copy="#tesla-url">Copy</button>
+        <a class="btn ghost small" id="tesla-open" target="_blank" rel="noopener noreferrer">Open</a>
+      </div>
+      <p class="hint">Bookmark this in the car's browser. Anyone with the link can see what you're playing and add tracks to the playlists you've enabled above — it can't change settings, reach your other playlists, or remove anything. Regenerate to invalidate the old link.</p>
+      <div class="saverow">
+        <button class="btn ghost small" id="tesla-regen">Regenerate</button>
+        <button class="btn ghost small" id="tesla-disable">Turn off</button>
+      </div>
+    </div>
+    <p class="hint" id="tesla-hint"></p>
   </section>
 
   <section class="card explain">

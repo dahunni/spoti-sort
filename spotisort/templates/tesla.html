@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<!-- The URL carries the access token; keep it out of any referer header. -->
+<meta name="referrer" content="no-referrer">
+<title>Add to playlist</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='tesla.css') }}">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎵</text></svg>">
+</head>
+<body>
+<main id="app">
+  <section id="idle" class="idle">
+    <div class="idle-icon">♪</div>
+    <h1 id="idle-title">Nothing playing</h1>
+    <p id="idle-note">Start a track in Spotify and it'll show up here.</p>
+  </section>
+
+  <section id="player" hidden>
+    <div class="art-wrap">
+      <img id="art" alt="" hidden>
+      <div id="art-fallback" class="art-fallback">♪</div>
+    </div>
+    <div class="meta">
+      <h1 id="title">—</h1>
+      <p id="artist">—</p>
+      <div class="bar"><div id="bar-fill"></div></div>
+    </div>
+    <div id="targets" class="targets"></div>
+    <p id="note" class="note"></p>
+  </section>
+</main>
+<div id="flash" class="flash" hidden></div>
+<script src="{{ url_for('static', filename='tesla.js') }}"></script>
+</body>
+</html>

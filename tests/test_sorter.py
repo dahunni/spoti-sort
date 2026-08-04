@@ -192,6 +192,110 @@ class NormaliseEntriesTest(unittest.TestCase):
         self.assertEqual(self.normalise(None), [])
 
 
+class PublicUrlTest(unittest.TestCase):
+    def clean(self, raw):
+        from spotisort.config import clean_public_url
+        return clean_public_url(raw)
+
+    def test_trailing_slash_is_stripped(self):
+        # Spotify compares redirect URIs byte for byte, so this matters.
+        self.assertEqual(self.clean("http://192.168.1.50:8080/"), "http://192.168.1.50:8080")
+
+    def test_scheme_is_added_when_missing(self):
+        self.assertEqual(self.clean("192.168.1.50:8080"), "http://192.168.1.50:8080")
+
+    def test_https_and_hostname(self):
+        self.assertEqual(self.clean(" https://spoti.example.com "), "https://spoti.example.com")
+
+    def test_subpath_is_kept_for_reverse_proxies(self):
+        self.assertEqual(self.clean("https://home.example.com/spotisort/"),
+                         "https://home.example.com/spotisort")
+
+    def test_empty_means_default(self):
+        self.assertEqual(self.clean("   "), "")
+
+    def test_rejects_bad_input(self):
+        for bad in ("ftp://host", "http://", "http://host?x=1", "http://host#f"):
+            with self.assertRaises(ValueError, msg=bad):
+                self.clean(bad)
+
+
+class TeslaTokenTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        for var in ("PLAYLIST_IDS", "SORT_ORDER", "INTERVAL_MINUTES", "PUBLIC_URL",
+                    "REDIRECT_URI", "PORT"):
+            os.environ.pop(var, None)
+
+    def load(self):
+        from spotisort.config import Config
+        return Config(self.tmp)
+
+    def test_disabled_by_default(self):
+        cfg = self.load()
+        self.assertEqual(cfg.tesla_token, "")
+        self.assertEqual(cfg.tesla_url, "")
+
+    def test_token_survives_a_restart_and_builds_a_url(self):
+        cfg = self.load()
+        cfg.update(public_url="http://192.168.1.50:8080")
+        token = cfg.new_tesla_token()
+        self.assertGreaterEqual(len(token), 20)
+        self.assertEqual(self.load().tesla_url, "http://192.168.1.50:8080/tesla/" + token)
+
+    def test_regenerating_changes_the_token(self):
+        cfg = self.load()
+        first = cfg.new_tesla_token()
+        self.assertNotEqual(cfg.new_tesla_token(), first)
+
+    def test_disable_clears_the_url(self):
+        cfg = self.load()
+        cfg.new_tesla_token()
+        cfg.clear_tesla_token()
+        self.assertEqual(cfg.tesla_url, "")
+
+    def test_public_url_drives_the_redirect_uri(self):
+        cfg = self.load()
+        cfg.update(public_url="https://spoti.example.com")
+        self.assertEqual(cfg.redirect_uri, "https://spoti.example.com/callback")
+
+    def test_redirect_uri_env_overrides_public_url(self):
+        cfg = self.load()
+        cfg.update(public_url="https://spoti.example.com")
+        os.environ["REDIRECT_URI"] = "https://other.example.com/callback"
+        try:
+            self.assertEqual(cfg.redirect_uri, "https://other.example.com/callback")
+            # ...but the Tesla link still follows the public address.
+            self.assertTrue(cfg.base_url.startswith("https://spoti.example.com"))
+        finally:
+            del os.environ["REDIRECT_URI"]
+
+    def test_default_redirect_uri_is_loopback(self):
+        self.assertEqual(self.load().redirect_uri, "http://127.0.0.1:8080/callback")
+
+
+class ScopeTest(unittest.TestCase):
+    def test_old_token_reports_the_new_playback_scopes(self):
+        from spotisort.spotify import missing_scopes
+        old = {"scope": ("playlist-read-private playlist-read-collaborative "
+                         "playlist-modify-private playlist-modify-public")}
+        self.assertEqual(sorted(missing_scopes(old)),
+                         ["user-read-currently-playing", "user-read-playback-state"])
+
+    def test_current_token_is_complete(self):
+        from spotisort.spotify import SCOPE, missing_scopes
+        self.assertEqual(missing_scopes({"scope": SCOPE}), [])
+
+    def test_comma_separated_scopes_are_understood(self):
+        from spotisort.spotify import SCOPE, missing_scopes
+        self.assertEqual(missing_scopes({"scope": SCOPE.replace(" ", ",")}), [])
+
+    def test_absent_token_needs_everything(self):
+        from spotisort.spotify import SCOPE, missing_scopes
+        self.assertEqual(missing_scopes(None), SCOPE.split())
+
+
 class ConfigMigrationTest(unittest.TestCase):
     def setUp(self):
         import tempfile

@@ -86,7 +86,11 @@ a { color: inherit; text-decoration-color: var(--accent); text-underline-offset:
 .steps { margin: 0 0 14px; padding-left: 20px; }
 .steps li { margin-bottom: 9px; }
 .copyrow { display: flex; gap: 8px; align-items: center; margin: 7px 0 2px; flex-wrap: wrap; }
-.copyrow code { padding: 5px 9px; }
+.copyrow code { padding: 5px 9px; overflow-wrap: anywhere; }
+.urlrow { display: flex; gap: 8px; align-items: center; margin: 7px 0 2px; }
+.urlrow input { margin-top: 0; }
+.urlrow .btn { flex: none; }
+a.btn { line-height: normal; }
 
 /* forms */
 label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 12px; }
