@@ -1,9 +1,25 @@
-FROM python:3.6.12-alpine3.12
+FROM python:3.12-alpine
 
-COPY . .
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    CONFIG_DIR=/config \
+    PORT=8080
 
-RUN pip install -r requirements.txt
+WORKDIR /app
 
-RUN crontab crontab
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-CMD ["python", "/entrypoint.py"]
+COPY app.py .
+COPY spotisort ./spotisort
+
+# Created so the container still starts (with a clear error) when the volume is
+# missing, rather than failing deep inside the OAuth cache writer.
+RUN mkdir -p /config
+VOLUME /config
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+  CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1
+
+CMD ["python", "app.py"]

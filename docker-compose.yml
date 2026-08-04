@@ -1,0 +1,19 @@
+services:
+  spoti-sort:
+    build: .
+    # image: ghcr.io/dahunni/spoti-sort:latest
+    container_name: spoti-sort
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/config
+    environment:
+      # Optional: everything below can also be set in the web UI.
+      # - CLIENT_ID=
+      # - CLIENT_SECRET=
+      # Set this when you reach the UI on anything other than http://127.0.0.1:8080,
+      # and add the identical value to your Spotify app's redirect URIs.
+      # - REDIRECT_URI=http://192.168.1.50:8080/callback
+      # - UI_PASSWORD=
+      - TZ=Europe/Berlin

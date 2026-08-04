@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block headeraside %}
+<div class="account" id="account" hidden>
+  <img id="account-img" alt="" hidden>
+  <div>
+    <span class="dot ok"></span><span id="account-name">—</span>
+    <div class="account-actions">
+      <button class="link" id="disconnect">Disconnect</button>
+      {% if has_password %}<form method="post" action="{{ url_for('logout') }}"><button class="link" type="submit">Sign out</button></form>{% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+
+<div id="toast" class="toast" hidden></div>
+
+<!-- ── Step 1: credentials ─────────────────────────────────────────── -->
+<section class="card" id="step-credentials" {% if status.configured %}hidden{% endif %}>
+  <div class="step">1</div>
+  <h2>Connect a Spotify app</h2>
+  <p>Spotify only lets a program touch your playlists through an app that <em>you</em> own. It takes a minute and stays entirely in your account.</p>
+  <ol class="steps">
+    <li>Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer">Spotify developer dashboard</a> and click <b>Create app</b>. Name it anything.</li>
+    <li>Add this exact <b>Redirect URI</b> — it must match character for character, trailing slash included:
+      <div class="copyrow"><code id="redirect-uri">{{ status.redirect_uri }}</code><button class="btn ghost small" data-copy="#redirect-uri">Copy</button></div>
+      <span class="hint">Reaching this UI on another address? Set the <code>REDIRECT_URI</code> variable to that address plus <code>/callback</code>, and use the same value here.</span>
+    </li>
+    <li>Tick <b>Web API</b>, save, then open <b>Settings</b> to reveal the Client ID and Client secret.</li>
+  </ol>
+  {% if status.credentials_from_env %}
+    <p class="alert ok">Credentials are supplied by the <code>CLIENT_ID</code> / <code>CLIENT_SECRET</code> environment variables.</p>
+  {% else %}
+  <form id="credentials-form" class="grid2">
+    <label>Client ID<input type="text" name="client_id" autocomplete="off" spellcheck="false" required></label>
+    <label>Client secret<input name="client_secret" type="password" autocomplete="off" spellcheck="false" required></label>
+    <button class="btn primary" type="submit">Save credentials</button>
+  </form>
+  <p class="hint">Stored in <code>/config/config.json</code> with owner-only permissions. Prefer environment variables? Set <code>CLIENT_ID</code> and <code>CLIENT_SECRET</code> instead and this form disappears.</p>
+  {% endif %}
+</section>
+
+<!-- ── Step 2: authorise ───────────────────────────────────────────── -->
+<section class="card" id="step-connect" {% if not status.configured or status.connected %}hidden{% endif %}>
+  <div class="step">2</div>
+  <h2>Authorise your account</h2>
+  <p>You'll be sent to Spotify and straight back here. spoti-sort asks only to read and reorder your playlists — it can't touch your saved songs, follows, or account.</p>
+  {% if status.auth_error %}<p class="alert error">{{ status.auth_error }}</p>{% endif %}
+  <a class="btn primary" href="{{ url_for('connect') }}">Authorise with Spotify</a>
+  <p class="hint">The refresh token is kept in <code>/config/tokens.json</code>, so this survives restarts. Mount that directory or you'll be doing this again after every update.</p>
+</section>
+
+<!-- ── Dashboard ───────────────────────────────────────────────────── -->
+<div id="dashboard" {% if not status.connected %}hidden{% endif %}>
+
+  <section class="card status-card">
+    <div class="status-main">
+      <div>
+        <span class="label">Next run</span>
+        <div class="countdown" id="countdown">—</div>
+        <div class="muted small" id="next-abs">&nbsp;</div>
+      </div>
+      <div class="status-actions">
+        <button class="btn primary" id="run-now">Sort now</button>
+        <span class="running-pill" id="running-pill" hidden><span class="spinner"></span>Sorting…</span>
+      </div>
+    </div>
+    <div class="lastrun" id="lastrun">
+      <span class="label">Last run</span>
+      <div class="muted" id="lastrun-body">No run recorded yet.</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Playlists</h2>
+    <p class="muted">Pick the ones to keep sorted. Only playlists you own or that are collaborative can be reordered — the rest are shown greyed out.</p>
+    <div class="toolbar">
+      <input type="search" id="filter" placeholder="Filter playlists…" autocomplete="off">
+      <span class="count" id="selcount"></span>
+      <button class="btn ghost small" id="refresh">Refresh</button>
+    </div>
+    <div id="playlists" class="playlists"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
+    <div class="saverow">
+      <button class="btn primary" id="save-selection" disabled>Save selection</button>
+      <span class="hint" id="save-hint"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Schedule &amp; order</h2>
+    <div class="grid2">
+      <label>Check every
+        <select id="interval">
+          <option value="5">5 minutes</option>
+          <option value="15">15 minutes</option>
+          <option value="30">30 minutes</option>
+          <option value="60">1 hour</option>
+          <option value="180">3 hours</option>
+          <option value="360">6 hours</option>
+          <option value="720">12 hours</option>
+          <option value="1440">1 day</option>
+        </select>
+        <span class="hint">A run that finds nothing to do costs one API call per playlist, so there's no need to be shy — but hourly is plenty for most people.</span>
+      </label>
+      <label>Sort order
+        <select id="order">
+          <option value="newest_first">Newest added first</option>
+          <option value="oldest_first">Oldest added first</option>
+        </select>
+        <span class="hint">Tracks added at the same moment keep their current relative order.</span>
+      </label>
+    </div>
+    <label class="check"><input type="checkbox" id="run-on-start"> Sort once at container start</label>
+  </section>
+
+  <section class="card explain">
+    <h2>How it works</h2>
+    <p>Spotify's clients can show a playlist in date-added order, but some — the Tesla player, most car head units — always play it in stored order. The usual fix is to delete every track and re-add it in order, which resets every <em>Date added</em> to today and destroys the thing you were sorting by.</p>
+    <p>spoti-sort instead computes the shortest sequence of single-track <b>moves</b> that brings the stored order in line with the date order, and applies them one by one. Tracks are never removed, so timestamps, play counts and the playlist's identity all survive. A playlist that's already sorted costs one read and zero writes; one that gained three tracks overnight costs three moves, not a rebuild.</p>
+    <p>Duplicated tracks, local files and podcast episodes are handled by position rather than by track id, so they no longer confuse the sort.</p>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>window.__STATUS__ = {{ status|tojson }};</script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}

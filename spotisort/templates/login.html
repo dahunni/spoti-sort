@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Sign in · spoti-sort{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h2>Sign in</h2>
+  <p class="muted">This instance is protected by <code>UI_PASSWORD</code>.</p>
+  {% if error %}<p class="alert error">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ url_for('do_login') }}{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}" class="row">
+    <input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password" required>
+    <button class="btn primary" type="submit">Continue</button>
+  </form>
+</section>
+{% endblock %}

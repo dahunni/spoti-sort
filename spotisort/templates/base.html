@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{% block title %}spoti-sort{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎵</text></svg>">
+</head>
+<body>
+<div class="wrap">
+  <header class="head">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M4 7h11M4 12h8M4 17h5"/><path d="M17 15V5l4 2"/><circle cx="15.5" cy="16.5" r="2.5"/>
+        </svg>
+      </span>
+      <div>
+        <h1>spoti-sort</h1>
+        <p class="tagline">Keeps your playlists in date-added order, in&nbsp;place.</p>
+      </div>
+    </div>
+    {% block headeraside %}{% endblock %}
+  </header>
+  {% block content %}{% endblock %}
+  <footer class="foot">
+    <span>Reorders tracks through the Spotify API — nothing is ever removed or re-added, so <em>Date added</em> never changes.</span>
+  </footer>
+</div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

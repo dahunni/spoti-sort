@@ -1,0 +1,194 @@
+"""Spotify API access: OAuth wiring, paging, and the reorder executor."""
+
+from __future__ import annotations
+
+import logging
+import random
+import time
+from typing import Any, Callable, Dict, List, Optional
+
+import spotipy
+from spotipy.cache_handler import CacheFileHandler
+from spotipy.exceptions import SpotifyException
+from spotipy.oauth2 import SpotifyOAuth
+
+from .sorter import ITEM_FIELDS, PlaylistResult, RunResult, apply_move, plan_moves
+
+log = logging.getLogger(__name__)
+
+# Least privilege: we reorder playlists and nothing else. The original code also
+# asked for `user-library-modify`, which it never used.
+SCOPE = "playlist-read-private playlist-read-collaborative playlist-modify-private playlist-modify-public"
+
+MAX_ATTEMPTS = 5
+
+
+class NotAuthenticated(Exception):
+    pass
+
+
+def make_oauth(client_id: str, client_secret: str, redirect_uri: str, cache_path: str) -> SpotifyOAuth:
+    return SpotifyOAuth(
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+        scope=SCOPE,
+        cache_handler=CacheFileHandler(cache_path=cache_path),
+        open_browser=False,
+    )
+
+
+def _retry(call: Callable[[], Any], what: str) -> Any:
+    """Retry on rate limits and transient server errors.
+
+    A single 429 used to end the whole run mid-sort and leave the playlist half
+    ordered, which the next scheduled run then had to untangle.
+    """
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            return call()
+        except SpotifyException as exc:
+            retryable = exc.http_status == 429 or (exc.http_status or 0) >= 500
+            if not retryable or attempt == MAX_ATTEMPTS:
+                raise
+            delay = float(exc.headers.get("Retry-After", 0) or 0) if exc.headers else 0.0
+            if not delay:
+                delay = min(30.0, 2 ** attempt) + random.uniform(0, 0.5)
+            log.warning("%s: HTTP %s, retrying in %.1fs (attempt %d/%d)",
+                        what, exc.http_status, delay, attempt, MAX_ATTEMPTS)
+            time.sleep(delay)
+
+
+class SpotifyClient:
+    def __init__(self, auth_manager: SpotifyOAuth):
+        self._auth = auth_manager
+        # spotipy retries connection-level failures; API-level 429/5xx are handled
+        # by `_retry` so we can honour Retry-After ourselves.
+        self.sp = spotipy.Spotify(auth_manager=auth_manager, requests_timeout=30, retries=2)
+        self._me: Optional[Dict[str, Any]] = None
+
+    @classmethod
+    def from_cache(cls, oauth: SpotifyOAuth) -> "SpotifyClient":
+        token = oauth.cache_handler.get_cached_token()
+        if not token:
+            raise NotAuthenticated("no cached token")
+        if oauth.is_token_expired(token):
+            if not token.get("refresh_token"):
+                raise NotAuthenticated("cached token expired and has no refresh token")
+            oauth.refresh_access_token(token["refresh_token"])
+        return cls(oauth)
+
+    def me(self) -> Dict[str, Any]:
+        if self._me is None:
+            self._me = _retry(lambda: self.sp.me(), "me")
+        return self._me
+
+    def my_playlists(self) -> List[Dict[str, Any]]:
+        """Every playlist visible to the user, flagged with whether we may edit it."""
+        user_id = self.me()["id"]
+        out: List[Dict[str, Any]] = []
+        offset = 0
+        while True:
+            page = _retry(lambda o=offset: self.sp.current_user_playlists(limit=50, offset=o), "playlists")
+            for item in page.get("items", []):
+                if not item:
+                    continue
+                owner = (item.get("owner") or {}).get("id")
+                images = item.get("images") or []
+                out.append({
+                    "id": item["id"],
+                    "name": item.get("name") or "(untitled)",
+                    "owner": (item.get("owner") or {}).get("display_name") or owner or "",
+                    "total": (item.get("tracks") or {}).get("total", 0),
+                    "image": images[-1]["url"] if images else None,
+                    "editable": owner == user_id or bool(item.get("collaborative")),
+                })
+            if not page.get("next"):
+                break
+            offset += len(page.get("items") or [])
+            if not page.get("items"):
+                break
+        return out
+
+    def playlist_meta(self, playlist_id: str) -> Dict[str, Any]:
+        return _retry(
+            lambda: self.sp.playlist(playlist_id, fields="name,snapshot_id,collaborative,owner.id,tracks.total"),
+            "playlist %s" % playlist_id,
+        )
+
+    def playlist_items(self, playlist_id: str) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        page = _retry(
+            lambda: self.sp.playlist_items(playlist_id, fields=ITEM_FIELDS, limit=100,
+                                           additional_types=("track", "episode")),
+            "items %s" % playlist_id,
+        )
+        items.extend(page.get("items") or [])
+        while page.get("next"):
+            page = _retry(lambda p=page: self.sp.next(p), "items %s" % playlist_id)
+            items.extend(page.get("items") or [])
+        return items
+
+    def sort_playlist(self, playlist_id: str, order: str, dry_run: bool = False,
+                      pause: float = 0.05) -> PlaylistResult:
+        result = PlaylistResult(playlist_id=playlist_id)
+        try:
+            meta = self.playlist_meta(playlist_id)
+            result.name = meta.get("name") or playlist_id
+            owner = (meta.get("owner") or {}).get("id")
+            if owner != self.me()["id"] and not meta.get("collaborative"):
+                result.status = "skipped"
+                result.detail = "not owned by you and not collaborative"
+                return result
+
+            items = self.playlist_items(playlist_id)
+            result.total = len(items)
+            moves = plan_moves([i.get("added_at") for i in items], order)
+            if not moves:
+                result.detail = "already in order"
+                return result
+            if dry_run:
+                result.moves = len(moves)
+                result.detail = "dry run: %d move(s) needed" % len(moves)
+                return result
+
+            # Chain the snapshot id through the run. If the playlist changes underneath
+            # us (a track added from the phone mid-run) the API rejects the stale write
+            # instead of shuffling the wrong rows.
+            snapshot = meta.get("snapshot_id")
+            local = list(range(len(items)))
+            for range_start, insert_before in moves:
+                response = _retry(
+                    lambda s=range_start, b=insert_before, snap=snapshot: self.sp.playlist_reorder_items(
+                        playlist_id, s, b, range_length=1, snapshot_id=snap),
+                    "reorder %s" % playlist_id,
+                )
+                snapshot = (response or {}).get("snapshot_id", snapshot)
+                local = apply_move(local, range_start, insert_before)
+                result.moves += 1
+                if pause:
+                    time.sleep(pause)
+            result.detail = "%d move(s)" % result.moves
+            log.info("sorted %s (%s): %d move(s) over %d items",
+                     result.name, playlist_id, result.moves, result.total)
+        except SpotifyException as exc:
+            result.status = "error"
+            if exc.http_status == 404:
+                result.detail = "playlist not found"
+            elif exc.http_status == 403:
+                result.detail = "not allowed to modify this playlist"
+            else:
+                result.detail = exc.msg or str(exc)
+            log.warning("playlist %s failed: %s", playlist_id, result.detail)
+        except Exception as exc:  # noqa: BLE001 - one bad playlist must not kill the run
+            result.status = "error"
+            result.detail = str(exc)
+            log.exception("playlist %s failed", playlist_id)
+        return result
+
+    def sort_all(self, playlist_ids: List[str], order: str, dry_run: bool = False) -> RunResult:
+        run = RunResult(started_at=time.time())
+        for playlist_id in playlist_ids:
+            run.playlists.append(self.sort_playlist(playlist_id, order, dry_run=dry_run))
+        run.finished_at = time.time()
+        return run
