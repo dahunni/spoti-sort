@@ -2,11 +2,16 @@
   "use strict";
 
   const $ = (sel) => document.querySelector(sel);
+  const ORDER_LABELS = { newest_first: "newest first", oldest_first: "oldest first" };
+
+  // Selection is a Map of playlist id -> sort order, so each playlist carries its own.
+  const toMap = (entries) => new Map((entries || []).map((e) => [e.id, e.order]));
+
   const state = {
     status: window.__STATUS__ || {},
     playlists: [],
-    selected: new Set((window.__STATUS__ || {}).selected || []),
-    saved: new Set((window.__STATUS__ || {}).selected || []),
+    selected: toMap((window.__STATUS__ || {}).entries),
+    saved: toMap((window.__STATUS__ || {}).entries),
     // Anchor the countdown to a local clock so it ticks smoothly between polls
     // instead of jumping around with request latency.
     skew: 0,
@@ -78,9 +83,10 @@
     (run.playlists || []).forEach((p) => {
       const line = document.createElement("div");
       line.className = "runline";
+      const order = p.status === "ok" && ORDER_LABELS[p.order] ? ` · ${ORDER_LABELS[p.order]}` : "";
       line.innerHTML = `<span class="dot ${p.status}"></span>` +
         `<span class="name">${escape(p.name || p.playlist_id)}</span>` +
-        `<span class="muted small">${escape(p.detail || p.status)}</span>`;
+        `<span class="muted small">${escape((p.detail || p.status) + order)}</span>`;
       box.appendChild(line);
     });
     if (run.note) {
@@ -105,20 +111,40 @@
     }
 
     list.forEach((p) => {
+      const chosen = state.selected.has(p.id);
       const row = document.createElement("label");
-      row.className = "pl" + (p.editable ? "" : " locked");
+      row.className = "pl" + (p.editable ? "" : " locked") + (chosen ? " on" : "");
       const art = p.image
         ? `<img class="art" src="${escape(p.image)}" alt="" loading="lazy">`
         : `<span class="art"></span>`;
       const sub = p.editable
         ? `${p.total} track${p.total === 1 ? "" : "s"} · ${escape(p.owner)}`
         : `${p.total} tracks · owned by ${escape(p.owner)} — can't be reordered`;
+      const order = state.selected.get(p.id) || state.status.default_order || "newest_first";
       row.innerHTML =
-        `<input type="checkbox" ${state.selected.has(p.id) ? "checked" : ""} ${p.editable ? "" : "disabled"}>` +
+        `<input type="checkbox" ${chosen ? "checked" : ""} ${p.editable ? "" : "disabled"}>` +
         art +
-        `<span class="meta"><span class="name">${escape(p.name)}</span><span class="sub">${sub}</span></span>`;
-      row.querySelector("input").addEventListener("change", (ev) => {
-        if (ev.target.checked) state.selected.add(p.id); else state.selected.delete(p.id);
+        `<span class="meta"><span class="name">${escape(p.name)}</span><span class="sub">${sub}</span></span>` +
+        `<select class="order" ${chosen ? "" : "hidden"} aria-label="Sort order for ${escape(p.name)}">` +
+        `<option value="newest_first"${order === "newest_first" ? " selected" : ""}>Newest first</option>` +
+        `<option value="oldest_first"${order === "oldest_first" ? " selected" : ""}>Oldest first</option>` +
+        `</select>`;
+
+      const box = row.querySelector("input");
+      const select = row.querySelector("select");
+      box.addEventListener("change", () => {
+        if (box.checked) state.selected.set(p.id, select.value);
+        else state.selected.delete(p.id);
+        select.hidden = !box.checked;
+        row.classList.toggle("on", box.checked);
+        refreshSaveState();
+      });
+      // The row is a <label>, so a click anywhere in it would otherwise toggle
+      // the checkbox while the user is trying to pick an order.
+      select.addEventListener("click", (ev) => ev.preventDefault());
+      select.addEventListener("change", (ev) => {
+        ev.stopPropagation();
+        state.selected.set(p.id, select.value);
         refreshSaveState();
       });
       host.appendChild(row);
@@ -126,16 +152,19 @@
     refreshSaveState();
   }
 
-  function sameSet(a, b) {
-    return a.size === b.size && [...a].every((x) => b.has(x));
+  function sameSelection(a, b) {
+    return a.size === b.size && [...a].every(([id, order]) => b.get(id) === order);
   }
 
   function refreshSaveState() {
-    const dirty = !sameSet(state.selected, state.saved);
+    const dirty = !sameSelection(state.selected, state.saved);
     $("#save-selection").disabled = !dirty;
     $("#save-hint").textContent = dirty ? "Unsaved changes" : "";
     $("#selcount").textContent = `${state.selected.size} selected`;
   }
+
+  const entriesFromSelection = () =>
+    [...state.selected].map(([id, order]) => ({ id, order }));
 
   function renderAccount() {
     const st = state.status;
@@ -154,8 +183,8 @@
     state.status = st;
     state.skew = st.now - Date.now() / 1000;
     if (initial) {
-      state.saved = new Set(st.selected || []);
-      state.selected = new Set(st.selected || []);
+      state.saved = toMap(st.entries);
+      state.selected = toMap(st.entries);
     }
     $("#dashboard").hidden = !st.connected;
     $("#step-connect").hidden = !st.configured || st.connected;
@@ -163,7 +192,7 @@
     $("#running-pill").hidden = !st.running;
     $("#run-now").disabled = st.running;
     $("#interval").value = String(st.interval_minutes);
-    $("#order").value = st.order;
+    $("#default-order").value = st.default_order;
     $("#run-on-start").checked = !!st.run_on_start;
     renderAccount();
     renderLastRun();
@@ -221,8 +250,8 @@
     $("#save-selection").addEventListener("click", async (ev) => {
       ev.target.disabled = true;
       try {
-        await api("/api/selection", { method: "POST", body: { playlists: [...state.selected] } });
-        state.saved = new Set(state.selected);
+        await api("/api/selection", { method: "POST", body: { playlists: entriesFromSelection() } });
+        state.saved = new Map(state.selected);
         toast("Selection saved");
       } catch (err) { toast(err.message, true); }
       refreshSaveState();
@@ -237,8 +266,8 @@
     };
     $("#interval").addEventListener("change", (ev) =>
       saveSetting({ interval_minutes: Number(ev.target.value) }, "Schedule updated"));
-    $("#order").addEventListener("change", (ev) =>
-      saveSetting({ order: ev.target.value }, "Sort order updated"));
+    $("#default-order").addEventListener("change", (ev) =>
+      saveSetting({ default_order: ev.target.value }, "Default order updated"));
     $("#run-on-start").addEventListener("change", (ev) =>
       saveSetting({ run_on_start: ev.target.checked }, "Saved"));
 

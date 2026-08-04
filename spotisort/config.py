@@ -20,13 +20,18 @@ from .sorter import NEWEST_FIRST, OLDEST_FIRST
 log = logging.getLogger(__name__)
 
 DEFAULTS: Dict[str, Any] = {
+    # [{"id": "...", "order": "newest_first"}, ...] - each playlist carries its own
+    # order. Plain id strings are still accepted and migrated on load.
     "playlists": [],
     "interval_minutes": 60,
+    # Applies to playlists that don't specify one, and to newly selected ones.
     "order": NEWEST_FIRST,
     "client_id": "",
     "client_secret": "",
     "run_on_start": True,
 }
+
+ORDERS = (NEWEST_FIRST, OLDEST_FIRST)
 
 MIN_INTERVAL = 5
 MAX_INTERVAL = 60 * 24 * 7
@@ -74,22 +79,26 @@ class Config:
                 self._data.update({k: v for k, v in stored.items() if k in DEFAULTS})
         except (OSError, ValueError) as exc:
             log.warning("ignoring unreadable config %s: %s", self.path, exc)
+        # Config written before per-playlist ordering stores bare id strings; they
+        # inherit whatever the single global order was at the time.
+        self._data["playlists"] = normalise_entries(self._data["playlists"], self._data["order"])
 
     def _seed_from_env(self) -> None:
         """Accept the old PLAYLIST_IDS/interval variables as first-boot defaults."""
         changed = False
+        # Read the default order first so seeded playlists pick it up.
+        order = _env("SORT_ORDER")
+        if order in ORDERS:
+            self._data["order"] = order
+            changed = True
         if not self._data["playlists"]:
             raw = _env("PLAYLIST_IDS")
             if raw:
-                self._data["playlists"] = parse_playlist_ids(raw)
+                self._data["playlists"] = normalise_entries([raw], self._data["order"])
                 changed = True
         interval = _env("INTERVAL_MINUTES")
         if interval.isdigit():
             self._data["interval_minutes"] = clamp_interval(int(interval))
-            changed = True
-        order = _env("SORT_ORDER")
-        if order in (NEWEST_FIRST, OLDEST_FIRST):
-            self._data["order"] = order
             changed = True
         if changed:
             self.save()
@@ -113,8 +122,18 @@ class Config:
         return bool(self.client_id and self.client_secret)
 
     @property
+    def entries(self) -> List[Dict[str, str]]:
+        """Selected playlists as ``{"id", "order"}``, each with its own sort order."""
+        return [dict(e) for e in self._data["playlists"]]
+
+    @property
     def playlists(self) -> List[str]:
-        return list(self._data["playlists"])
+        return [e["id"] for e in self._data["playlists"]]
+
+    def set_entries(self, raw: Any) -> List[Dict[str, str]]:
+        entries = normalise_entries(raw, self._data["order"])
+        self.update(playlists=entries)
+        return entries
 
     @property
     def interval_minutes(self) -> int:
@@ -122,6 +141,7 @@ class Config:
 
     @property
     def order(self) -> str:
+        """Default order, used for playlists that don't carry one of their own."""
         return self._data["order"]
 
     @property
@@ -229,6 +249,40 @@ def parse_playlist_ids(raw: str) -> List[str]:
             out.append(token)
     seen = set()
     return [p for p in out if not (p in seen or seen.add(p))]
+
+
+def normalise_entries(raw: Any, default_order: str) -> List[Dict[str, str]]:
+    """Coerce anything playlist-shaped into ``[{"id", "order"}]``, de-duplicated.
+
+    Accepts the current form (dicts), the pre-per-playlist-order form (bare id
+    strings, which inherit ``default_order``), and raw user input containing URLs
+    or ``spotify:`` URIs. First occurrence of an id wins.
+    """
+    if isinstance(raw, (str, dict)):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        return []
+
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for item in raw:
+        if isinstance(item, dict):
+            raw_id = item.get("id")
+            ids = parse_playlist_ids(raw_id) if isinstance(raw_id, str) else []
+            order = item.get("order")
+        elif isinstance(item, str):
+            ids = parse_playlist_ids(item)
+            order = None
+        else:
+            continue  # anything else is junk, not an id spelled oddly
+        if order not in ORDERS:
+            order = default_order if default_order in ORDERS else NEWEST_FIRST
+        for playlist_id in ids:
+            if playlist_id in seen:
+                continue
+            seen.add(playlist_id)
+            out.append({"id": playlist_id, "order": order})
+    return out
 
 
 def clamp_interval(minutes: int) -> int:

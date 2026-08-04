@@ -156,5 +156,96 @@ class ParsePlaylistIdsTest(unittest.TestCase):
         self.assertEqual(parse_playlist_ids("  , ,\n"), [])
 
 
+class NormaliseEntriesTest(unittest.TestCase):
+    def normalise(self, raw, default="newest_first"):
+        from spotisort.config import normalise_entries
+        return normalise_entries(raw, default)
+
+    def test_bare_ids_migrate_to_the_default_order(self):
+        # The pre-per-playlist-order config format.
+        self.assertEqual(self.normalise(["aaa", "bbb"], "oldest_first"), [
+            {"id": "aaa", "order": "oldest_first"},
+            {"id": "bbb", "order": "oldest_first"},
+        ])
+
+    def test_each_entry_keeps_its_own_order(self):
+        raw = [{"id": "aaa", "order": "oldest_first"}, {"id": "bbb", "order": "newest_first"}]
+        self.assertEqual(self.normalise(raw, "newest_first"), raw)
+
+    def test_unknown_order_falls_back_to_the_default(self):
+        self.assertEqual(self.normalise([{"id": "aaa", "order": "sideways"}], "oldest_first"),
+                         [{"id": "aaa", "order": "oldest_first"}])
+
+    def test_mixed_formats_and_urls(self):
+        raw = ["aaa", {"id": "https://open.spotify.com/playlist/bbb?si=1", "order": "oldest_first"}]
+        self.assertEqual(self.normalise(raw), [
+            {"id": "aaa", "order": "newest_first"},
+            {"id": "bbb", "order": "oldest_first"},
+        ])
+
+    def test_first_occurrence_of_a_duplicate_wins(self):
+        raw = [{"id": "aaa", "order": "oldest_first"}, {"id": "aaa", "order": "newest_first"}]
+        self.assertEqual(self.normalise(raw), [{"id": "aaa", "order": "oldest_first"}])
+
+    def test_junk_is_dropped(self):
+        self.assertEqual(self.normalise([None, 42, {}, {"id": ""}, ""]), [])
+        self.assertEqual(self.normalise(None), [])
+
+
+class ConfigMigrationTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        for var in ("PLAYLIST_IDS", "SORT_ORDER", "INTERVAL_MINUTES"):
+            os.environ.pop(var, None)
+
+    def load(self):
+        from spotisort.config import Config
+        return Config(self.tmp)
+
+    def write(self, payload):
+        import json
+        with open(os.path.join(self.tmp, "config.json"), "w") as fh:
+            json.dump(payload, fh)
+
+    def test_old_config_is_migrated_in_place(self):
+        self.write({"playlists": ["aaa", "bbb"], "order": "oldest_first"})
+        cfg = self.load()
+        self.assertEqual(cfg.entries, [
+            {"id": "aaa", "order": "oldest_first"},
+            {"id": "bbb", "order": "oldest_first"},
+        ])
+        self.assertEqual(cfg.playlists, ["aaa", "bbb"])
+
+    def test_per_playlist_orders_survive_a_reload(self):
+        cfg = self.load()
+        cfg.set_entries([{"id": "aaa", "order": "oldest_first"}, "bbb"])
+        self.assertEqual(self.load().entries, [
+            {"id": "aaa", "order": "oldest_first"},
+            {"id": "bbb", "order": "newest_first"},
+        ])
+
+    def test_changing_the_default_leaves_existing_playlists_alone(self):
+        cfg = self.load()
+        cfg.set_entries(["aaa"])
+        cfg.update(order="oldest_first")
+        cfg.set_entries(cfg.entries + ["bbb"])
+        self.assertEqual(cfg.entries, [
+            {"id": "aaa", "order": "newest_first"},
+            {"id": "bbb", "order": "oldest_first"},
+        ])
+
+    def test_playlist_ids_env_seeds_with_the_default_order(self):
+        os.environ["PLAYLIST_IDS"] = "aaa bbb"
+        os.environ["SORT_ORDER"] = "oldest_first"
+        try:
+            self.assertEqual(self.load().entries, [
+                {"id": "aaa", "order": "oldest_first"},
+                {"id": "bbb", "order": "oldest_first"},
+            ])
+        finally:
+            del os.environ["PLAYLIST_IDS"], os.environ["SORT_ORDER"]
+
+
 if __name__ == "__main__":
     unittest.main()

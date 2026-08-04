@@ -131,7 +131,7 @@ class SpotifyClient:
 
     def sort_playlist(self, playlist_id: str, order: str, dry_run: bool = False,
                       pause: float = 0.05) -> PlaylistResult:
-        result = PlaylistResult(playlist_id=playlist_id)
+        result = PlaylistResult(playlist_id=playlist_id, order=order)
         try:
             meta = self.playlist_meta(playlist_id)
             result.name = meta.get("name") or playlist_id
@@ -186,9 +186,11 @@ class SpotifyClient:
             log.exception("playlist %s failed", playlist_id)
         return result
 
-    def sort_all(self, playlist_ids: List[str], order: str, dry_run: bool = False) -> RunResult:
+    def sort_all(self, entries: List[Dict[str, str]], dry_run: bool = False) -> RunResult:
+        """Sort each selected playlist using its own configured order."""
         run = RunResult(started_at=time.time())
-        for playlist_id in playlist_ids:
-            run.playlists.append(self.sort_playlist(playlist_id, order, dry_run=dry_run))
+        for entry in entries:
+            run.playlists.append(
+                self.sort_playlist(entry["id"], entry["order"], dry_run=dry_run))
         run.finished_at = time.time()
         return run

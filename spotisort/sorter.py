@@ -125,6 +125,7 @@ class PlaylistResult:
     moves: int = 0
     status: str = "ok"          # ok | skipped | error
     detail: str = ""
+    order: str = NEWEST_FIRST
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -134,6 +135,7 @@ class PlaylistResult:
             "moves": self.moves,
             "status": self.status,
             "detail": self.detail,
+            "order": self.order,
         }
 
 

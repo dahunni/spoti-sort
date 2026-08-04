@@ -98,7 +98,7 @@ precedence where both exist.
 | `UI_PASSWORD` | – | If set, the UI asks for this password. |
 | `PLAYLIST_IDS` | – | Seeds the playlist selection on first boot. Accepts ids, URLs or `spotify:` URIs, separated by commas or whitespace. |
 | `INTERVAL_MINUTES` | `60` | Overrides the schedule. |
-| `SORT_ORDER` | `newest_first` | `newest_first` or `oldest_first`. |
+| `SORT_ORDER` | `newest_first` | Default order for newly selected playlists: `newest_first` or `oldest_first`. Per-playlist orders are set in the UI. |
 | `LOG_LEVEL` | `INFO` | Python log level. |
 
 ### A note on exposure
@@ -123,6 +123,23 @@ brings the stored order in line with the date order, and applies them one at a t
   mid-run, Spotify rejects the stale write instead of shuffling the wrong rows.
 - Rate limits (HTTP 429) and server errors are retried with backoff, honouring `Retry-After`.
 - Tracks sharing an `added_at` keep their existing relative order, so they never churn.
+
+**Each playlist has its own sort order**, chosen next to it in the UI — a running mix can
+stay oldest-first while your main playlist stays newest-first. The *default order* setting
+only applies to playlists as you select them; changing it never rewrites choices you've
+already made. Settings written by an older version, which had a single global order, are
+migrated on first start: every playlist inherits the order that was in force.
+
+The stored form is a list of objects, so `config.json` stays hand-editable:
+
+```json
+{
+  "playlists": [
+    { "id": "37i9dQZF1DX0XUsuxWHRQd", "order": "newest_first" },
+    { "id": "1AbcDefGhiJklMnoPqrStu", "order": "oldest_first" }
+  ]
+}
+```
 
 Playlists you don't own and that aren't collaborative can't be reordered by anyone; the UI
 greys them out and runs report them as skipped.

@@ -12,7 +12,7 @@ from flask import (Flask, jsonify, redirect, render_template, request,
                    session, url_for)
 from spotipy.exceptions import SpotifyException
 
-from .config import Config, clamp_interval, parse_playlist_ids
+from .config import Config, clamp_interval
 from .scheduler import Scheduler
 from .sorter import NEWEST_FIRST, OLDEST_FIRST
 from .spotify import NotAuthenticated, SpotifyClient, make_oauth
@@ -71,8 +71,8 @@ class App:
     # -- runs --------------------------------------------------------------
 
     def run_sort(self) -> Dict[str, Any]:
-        ids = self.config.playlists
-        if not ids:
+        entries = self.config.entries
+        if not entries:
             return {"started_at": time.time(), "finished_at": time.time(), "duration": 0,
                     "moves": 0, "ok": True, "playlists": [], "note": "no playlists selected"}
         try:
@@ -80,7 +80,7 @@ class App:
         except NotAuthenticated as exc:
             return {"started_at": time.time(), "finished_at": time.time(), "duration": 0,
                     "moves": 0, "ok": False, "playlists": [], "error": str(exc)}
-        return client.sort_all(ids, self.config.order).as_dict()
+        return client.sort_all(entries).as_dict()
 
     def _store_run(self, result: Dict[str, Any]) -> None:
         self.config.save_state({"last_run": result})
@@ -98,8 +98,7 @@ class App:
             except (SpotifyException, NotAuthenticated, OSError):
                 connected = False
 
-        selected = self.config.playlists
-        known = {p["id"]: p for p in self._playlists}
+        entries = self.config.entries
         return {
             "configured": self.config.has_credentials,
             "credentials_from_env": self.config.credentials_from_env,
@@ -111,10 +110,9 @@ class App:
             "next_run_at": self.scheduler.next_run_at,
             "running": self.scheduler.running,
             "interval_minutes": self.config.interval_minutes,
-            "order": self.config.order,
+            "default_order": self.config.order,
             "run_on_start": self.config.run_on_start,
-            "selected": selected,
-            "selected_names": [known.get(p, {}).get("name", p) for p in selected],
+            "entries": entries,
             "last_run": self.scheduler.last_run,
         }
 
@@ -227,7 +225,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
             return jsonify({"error": "not connected"}), 409
         except SpotifyException as exc:
             return jsonify({"error": exc.msg or str(exc)}), 502
-        return jsonify({"playlists": items, "selected": config.playlists})
+        return jsonify({"playlists": items, "entries": config.entries})
 
     @app.post("/api/credentials")
     @login_required
@@ -246,14 +244,11 @@ def create_app(config: Optional[Config] = None) -> Flask:
     @app.post("/api/selection")
     @login_required
     def api_selection():
+        # Accepts [{"id", "order"}] as well as bare ids, which fall back to the
+        # default order.
         body = request.get_json(silent=True) or {}
-        raw = body.get("playlists", [])
-        if isinstance(raw, str):
-            ids = parse_playlist_ids(raw)
-        else:
-            ids = parse_playlist_ids(",".join(str(x) for x in raw))
-        config.update(playlists=ids)
-        return jsonify({"ok": True, "playlists": ids})
+        entries = config.set_entries(body.get("playlists", []))
+        return jsonify({"ok": True, "playlists": entries})
 
     @app.post("/api/settings")
     @login_required
@@ -266,10 +261,10 @@ def create_app(config: Optional[Config] = None) -> Flask:
             except (TypeError, ValueError):
                 return jsonify({"error": "interval must be a number"}), 400
             updates["interval_minutes"] = minutes
-        if "order" in body:
-            if body["order"] not in (NEWEST_FIRST, OLDEST_FIRST):
+        if "default_order" in body:
+            if body["default_order"] not in (NEWEST_FIRST, OLDEST_FIRST):
                 return jsonify({"error": "unknown sort order"}), 400
-            updates["order"] = body["order"]
+            updates["order"] = body["default_order"]
         if "run_on_start" in body:
             updates["run_on_start"] = bool(body["run_on_start"])
         config.update(**updates)

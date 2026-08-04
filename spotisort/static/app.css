@@ -157,6 +157,11 @@ input:focus-visible, select:focus-visible, button:focus-visible {
 .pl .meta { min-width: 0; flex: 1; }
 .pl .name { display: block; font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl .sub { display: block; font-size: 12px; color: var(--muted); }
+.pl.on { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.pl select.order {
+  width: auto; margin-top: 0; flex: none; padding: 5px 8px; font-size: 12px;
+  font-weight: 600; background: var(--panel); border-radius: 7px;
+}
 .pl.locked { opacity: .5; cursor: not-allowed; }
 .pl.locked:hover { background: none; }
 .skeleton { height: 52px; margin: 5px; border-radius: 9px; background: linear-gradient(90deg, var(--line), transparent, var(--line)); background-size: 200% 100%; animation: sheen 1.4s ease-in-out infinite; }
