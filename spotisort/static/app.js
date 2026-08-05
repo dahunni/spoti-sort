@@ -393,7 +393,22 @@
   if (publicUrlBtn) {
     const scheme = $("#public-scheme");
     const host = $("#public-host");
-    const saved = composeUrl();
+    const savedUrl = state.status.public_url || "";
+
+    // The address in the browser bar is the one that actually reached this page,
+    // which beats the 127.0.0.1 fallback for everyone not sitting at the host.
+    // Includes any reverse-proxy subpath. Only ever a prefill — it is not stored
+    // until Save, so a Host header can't quietly become the redirect URI.
+    const detected = {
+      scheme: location.protocol === "https:" ? "https" : "http",
+      host: location.host + location.pathname.replace(/\/+$/, ""),
+    };
+    const detectedUrl = `${detected.scheme}://${detected.host}`;
+
+    if (!savedUrl && !state.status.public_url_from_env) {
+      scheme.value = detected.scheme;
+      host.value = detected.host;
+    }
 
     // Mirror the server's normalisation so the previewed URI is exactly what gets
     // stored — Spotify compares redirect URIs byte for byte, so a trailing slash
@@ -411,14 +426,20 @@
       $("#redirect-uri").textContent = base
         ? base + "/callback"
         : `http://127.0.0.1:${location.port || 80}/callback`;
-      const dirty = base !== saved;
-      $("#redirect-hint").textContent = dirty
-        ? "Not saved yet — click Save, then add this URI to your Spotify app."
-        : "";
+      if (base === savedUrl) {
+        $("#redirect-hint").textContent = "";
+      } else if (!savedUrl && base === detectedUrl) {
+        $("#redirect-hint").textContent =
+          "Detected from the address you're using — click Save to apply it.";
+      } else {
+        $("#redirect-hint").textContent =
+          "Not saved yet — click Save, then add this URI to your Spotify app.";
+      }
     }
 
     scheme.addEventListener("change", preview);
     host.addEventListener("input", preview);
+    preview();   // correct the server-rendered fallback straight away
     // Pasting a whole URL should split itself across the two controls.
     host.addEventListener("paste", (ev) => {
       const text = (ev.clipboardData || window.clipboardData).getData("text") || "";
