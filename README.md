@@ -266,6 +266,10 @@ If you see `403 Forbidden` on playlist endpoints while `/me` works, check that y
 app has **Web API** enabled and that your account is listed under **User Management** — a
 development-mode app only works for accounts you add, including your own.
 
+The Docker Hub page text lives in [DOCKERHUB.md](DOCKERHUB.md) — paste it into the
+repository's **full description** when it changes, alongside the short description in that
+file's header.
+
 ## 🔖 Versioning <a name="versioning"></a>
 
 [SemVer](https://semver.org) on a 2.x line: **2** marks the rewritten generation — 1.x was
