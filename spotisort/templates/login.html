@@ -3,9 +3,10 @@
 {% block content %}
 <section class="card narrow">
   <h2>Sign in</h2>
-  <p class="muted">This instance is protected by <code>UI_PASSWORD</code>.</p>
+  <p class="muted">This spoti-sort instance is password protected.</p>
   {% if error %}<p class="alert error">{{ error }}</p>{% endif %}
   <form method="post" action="{{ url_for('do_login') }}{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}" class="row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password" required>
     <button class="btn primary" type="submit">Continue</button>
   </form>

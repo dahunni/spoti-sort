@@ -8,14 +8,17 @@ compose file stays the source of truth when one is used.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
 import secrets
 import threading
+import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
+from .security import hash_password, verify_password
 from .sorter import NEWEST_FIRST, OLDEST_FIRST
 
 log = logging.getLogger(__name__)
@@ -35,6 +38,9 @@ DEFAULTS: Dict[str, Any] = {
     "public_url": "",
     # Bearer token embedded in the Tesla page URL so the car can bookmark it.
     "tesla_token": "",
+    # PBKDF2 hash of the UI password when set through the web UI. The UI_PASSWORD
+    # environment variable is an alternative and takes precedence.
+    "ui_password_hash": "",
 }
 
 ORDERS = (NEWEST_FIRST, OLDEST_FIRST)
@@ -128,18 +134,68 @@ class Config:
         return bool(self.client_id and self.client_secret)
 
     @property
-    def entries(self) -> List[Dict[str, str]]:
-        """Selected playlists as ``{"id", "order"}``, each with its own sort order."""
+    def entries(self) -> List[Dict[str, Any]]:
+        """Every selected playlist, each carrying its own roles and settings."""
         return [dict(e) for e in self._data["playlists"]]
+
+    @property
+    def sort_entries(self) -> List[Dict[str, Any]]:
+        """Playlists the scheduler keeps in date order."""
+        return [dict(e) for e in self._data["playlists"] if e.get("sort", True)]
+
+    @property
+    def add_entries(self) -> List[Dict[str, Any]]:
+        """Playlists offered as targets on the Tesla page.
+
+        Independent of sorting: a playlist can be a quick-add target without ever
+        being reordered, and vice versa.
+        """
+        return [dict(e) for e in self._data["playlists"] if e.get("add", True)]
 
     @property
     def playlists(self) -> List[str]:
         return [e["id"] for e in self._data["playlists"]]
 
-    def set_entries(self, raw: Any) -> List[Dict[str, str]]:
+    def set_entries(self, raw: Any) -> List[Dict[str, Any]]:
+        previous = {e["id"]: e for e in self._data["playlists"]}
+        # Which incoming items actually stated a favourite? Anything else keeps what
+        # we already knew, so saving a selection sent as bare ids can't silently
+        # clear the stars.
+        stated = set()
+        items = raw if isinstance(raw, (list, tuple)) else [raw]
+        for item in items:
+            if isinstance(item, dict) and "favorite" in item:
+                for pid in parse_playlist_ids(str(item.get("id") or "")):
+                    stated.add(pid)
+
         entries = normalise_entries(raw, self._data["order"])
+        for entry in entries:
+            old = previous.get(entry["id"])
+            if not old:
+                continue
+            # Usage history is server-owned and never comes back from the UI.
+            entry["last_used"] = old.get("last_used", 0.0)
+            if entry["id"] not in stated:
+                entry["favorite"] = bool(old.get("favorite"))
         self.update(playlists=entries)
         return entries
+
+    def touch_entry(self, playlist_id: str) -> None:
+        """Record that a track was just added here, for recency ordering."""
+        entries = self._data["playlists"]
+        for entry in entries:
+            if entry["id"] == playlist_id:
+                entry["last_used"] = time.time()
+                self.save()
+                return
+
+    def set_favorite(self, playlist_id: str, favorite: bool) -> bool:
+        for entry in self._data["playlists"]:
+            if entry["id"] == playlist_id:
+                entry["favorite"] = bool(favorite)
+                self.save()
+                return True
+        return False
 
     @property
     def interval_minutes(self) -> int:
@@ -165,10 +221,34 @@ class Config:
 
     @property
     def redirect_uri(self) -> str:
-        # Must match the Spotify dashboard entry byte for byte. REDIRECT_URI stays
-        # available for the case where the callback address differs from the base
-        # address (an odd reverse-proxy setup, say).
-        return _env("REDIRECT_URI") or self.base_url + "/callback"
+        """The callback URI, which Spotify constrains far more than the UI address.
+
+        Spotify only accepts HTTPS, or HTTP on a loopback *literal* (127.0.0.1 or
+        [::1]) — plain HTTP to a LAN address or to `localhost` is rejected with
+        "Insecure redirect URI". So this deliberately does not follow the public
+        address unless that address is already HTTPS; a LAN http:// setup
+        authorises over loopback instead, which is what Spotify permits.
+        """
+        env = _env("REDIRECT_URI")
+        if env:
+            return env
+        base = self.public_url
+        if base.startswith("https://"):
+            return base + "/callback"
+        return "http://127.0.0.1:%d/callback" % self.port
+
+    @property
+    def redirect_uri_is_loopback(self) -> bool:
+        return (urlparse(self.redirect_uri).hostname or "") in ("127.0.0.1", "::1")
+
+    @property
+    def public_url_parts(self) -> Dict[str, str]:
+        """``base_url`` split for the setup form's scheme picker and host field."""
+        parsed = urlparse(self.base_url)
+        return {
+            "scheme": parsed.scheme or "http",
+            "host": (parsed.netloc + (parsed.path or "")).rstrip("/"),
+        }
 
     @property
     def redirect_uri_from_env(self) -> bool:
@@ -204,9 +284,31 @@ class Config:
         raw = _env("PORT")
         return int(raw) if raw.isdigit() else 8080
 
+    # -- ui authentication -------------------------------------------------
+
     @property
-    def ui_password(self) -> str:
-        return _env("UI_PASSWORD")
+    def ui_password_from_env(self) -> bool:
+        return bool(_env("UI_PASSWORD"))
+
+    @property
+    def auth_enabled(self) -> bool:
+        return bool(_env("UI_PASSWORD") or self._data["ui_password_hash"])
+
+    def check_ui_password(self, supplied: str) -> bool:
+        env_password = _env("UI_PASSWORD")
+        if env_password:
+            return hmac.compare_digest(supplied or "", env_password)
+        return verify_password(supplied or "", str(self._data["ui_password_hash"]))
+
+    def set_ui_password(self, password: str) -> None:
+        """Store a UI password as a PBKDF2 hash, or clear it with an empty string."""
+        self.update(ui_password_hash=hash_password(password) if password else "")
+
+    @property
+    def is_public(self) -> bool:
+        """True when the configured address isn't loopback — i.e. others can reach it."""
+        host = urlparse(self.base_url).hostname or ""
+        return host not in ("127.0.0.1", "::1", "localhost", "")
 
     def get(self, key: str) -> Any:
         return self._data.get(key)
@@ -309,13 +411,23 @@ def normalise_entries(raw: Any, default_order: str) -> List[Dict[str, str]]:
     if not isinstance(raw, (list, tuple)):
         return []
 
-    out: List[Dict[str, str]] = []
+    out: List[Dict[str, Any]] = []
     seen = set()
     for item in raw:
+        favorite = False
+        last_used = 0.0
+        sort_flag = add_flag = None
         if isinstance(item, dict):
             raw_id = item.get("id")
             ids = parse_playlist_ids(raw_id) if isinstance(raw_id, str) else []
             order = item.get("order")
+            favorite = bool(item.get("favorite"))
+            sort_flag = item.get("sort")
+            add_flag = item.get("add")
+            try:
+                last_used = float(item.get("last_used") or 0.0)
+            except (TypeError, ValueError):
+                last_used = 0.0
         elif isinstance(item, str):
             ids = parse_playlist_ids(item)
             order = None
@@ -323,11 +435,18 @@ def normalise_entries(raw: Any, default_order: str) -> List[Dict[str, str]]:
             continue  # anything else is junk, not an id spelled oddly
         if order not in ORDERS:
             order = default_order if default_order in ORDERS else NEWEST_FIRST
+        # Absent means yes: config written before the two roles were separated
+        # listed playlists that were both sorted and offered on the Tesla page.
+        sort_flag = True if sort_flag is None else bool(sort_flag)
+        add_flag = True if add_flag is None else bool(add_flag)
+        if not sort_flag and not add_flag:
+            continue  # no role left; the playlist is simply deselected
         for playlist_id in ids:
             if playlist_id in seen:
                 continue
             seen.add(playlist_id)
-            out.append({"id": playlist_id, "order": order})
+            out.append({"id": playlist_id, "order": order, "sort": sort_flag,
+                        "add": add_flag, "favorite": favorite, "last_used": last_used})
     return out
 
 

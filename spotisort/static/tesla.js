@@ -53,7 +53,11 @@
   }
 
   function renderTargets(targets, now) {
-    var key = targets.map(function (t) { return t.id + ":" + t.name; }).join("|") + "@" + now.uri;
+    // Order matters here: the server sorts favourites and recently-used first, so a
+    // change in ranking has to rebuild the row.
+    var key = targets.map(function (t) {
+      return t.id + ":" + t.name + ":" + (t.favorite ? 1 : 0);
+    }).join("|") + "@" + now.uri;
     if (key === current.targetsKey) return;   // avoid rebuilding under the user's finger
     current.targetsKey = key;
 
@@ -63,36 +67,50 @@
       el("note").textContent = "No playlists enabled yet — pick some in spoti-sort first.";
       return;
     }
-    el("note").textContent = now.addable ? "" : "This track can't be added to a playlist.";
+    el("note").textContent = !now.addable
+      ? "This track can't be added to a playlist."
+      : "Tap to add · tap a green one again to undo";
 
     targets.forEach(function (target) {
       var button = document.createElement("button");
-      button.className = "target" + (target.added ? " done" : "");
+      button.className = "target" + (target.added ? " done" : "") +
+                         (target.favorite ? " fav" : "");
       button.type = "button";
       button.disabled = !now.addable;
-      button.innerHTML = '<span class="label"></span><span class="tick">✓</span>';
+      button.innerHTML = '<span class="star">★</span><span class="label"></span>' +
+                         '<span class="tick">✓</span>';
       button.querySelector(".label").textContent = target.name;
-      button.onclick = function () { add(button, target, now); };
+      button.onclick = function () { toggle(button, target, now); };
       host.appendChild(button);
     });
   }
 
-  function add(button, target, now) {
-    if (button.disabled || button.className.indexOf("done") >= 0) return;
+  // One button, both directions: tap to add, tap again to take it back off.
+  // Without this an accidental tap was permanent from inside the car.
+  function toggle(button, target, now) {
+    if (button.disabled) return;
+    var undo = button.className.indexOf("done") >= 0;
+    var wasFav = button.className.indexOf("fav") >= 0 ? " fav" : "";
     button.disabled = true;
-    button.className = "target busy";
-    request(API + "/add", {
+    button.className = "target busy" + wasFav;
+    request(API + (undo ? "/remove" : "/add"), {
       method: "POST",
       body: { playlist_id: target.id, uri: now.uri }
     }, function (err, data) {
       button.disabled = false;
       if (err) {
-        button.className = "target";
+        // Leave the button showing the state the playlist is actually in.
+        button.className = "target" + (undo ? " done" : "") + wasFav;
         flash(err, true);
         return;
       }
-      button.className = "target done";
-      flash(data.duplicate ? "Already in " + target.name : "Added to " + target.name);
+      if (undo) {
+        button.className = "target" + wasFav;
+        flash("Removed from " + target.name);
+      } else {
+        button.className = "target done" + wasFav;
+        flash(data.duplicate ? "Already in " + target.name : "Added to " + target.name);
+      }
     });
   }
 

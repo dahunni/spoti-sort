@@ -17,35 +17,61 @@
 <div id="toast" class="toast" hidden></div>
 
 <!-- ── Step 1: credentials ─────────────────────────────────────────── -->
-<section class="card" id="step-credentials" {% if status.configured %}hidden{% endif %}>
+{# Stays visible until actually connected. It used to hide as soon as credentials
+   were saved, which took the address field and redirect URI away with it — exactly
+   when the Authorise button appears and the two have to agree. #}
+<section class="card" id="step-credentials" {% if status.connected %}hidden{% endif %}>
   <div class="step">1</div>
   <h2>Connect a Spotify app</h2>
   <p>Spotify only lets a program touch your playlists through an app that <em>you</em> own. It takes a minute and stays entirely in your account.</p>
   <ol class="steps">
     <li>Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer">Spotify developer dashboard</a> and click <b>Create app</b>. Name it anything.</li>
-    <li>Check the address you reach this page on. If it isn't the one below, correct it here first — Spotify compares redirect URIs character for character.
+    <li>Set the address you reach this page on. Behind a reverse proxy this is the
+      public name and scheme, not the container's — pick <code>https</code> and drop the port
+      if your proxy terminates TLS.
       <div class="urlrow">
-        <input type="text" id="public-url" placeholder="http://127.0.0.1:8080" value="{{ status.public_url }}"
-               autocomplete="off" spellcheck="false" {% if status.public_url_from_env %}disabled{% endif %}>
+        <select id="public-scheme" class="scheme" {% if status.public_url_from_env %}disabled{% endif %}>
+          <option value="http"{% if status.public_url_parts.scheme != 'https' %} selected{% endif %}>http://</option>
+          <option value="https"{% if status.public_url_parts.scheme == 'https' %} selected{% endif %}>https://</option>
+        </select>
+        <input type="text" id="public-host" placeholder="192.168.1.50:8080"
+               value="{{ status.public_url_parts.host }}"
+               autocomplete="off" spellcheck="false" autocapitalize="off"
+               {% if status.public_url_from_env %}disabled{% endif %}>
         <button class="btn ghost small" id="save-public-url" {% if status.public_url_from_env %}disabled{% endif %}>Save</button>
       </div>
-      <span class="hint">Hostname or IP with the port, no trailing path — for example <code>http://192.168.1.50:8080</code> or <code>https://spoti.example.com</code>. Leave empty for the default.</span>
+      <span class="hint">Hostname or IP, with a port only if you need one — <code>192.168.1.50:8080</code>, <code>spoti.example.com</code>, or <code>example.com/spotisort</code> for a proxy subpath.
+      {% if status.public_url_from_env %}Fixed by the <code>PUBLIC_URL</code> variable.{% endif %}</span>
     </li>
-    <li>Add this exact <b>Redirect URI</b> to the Spotify app:
+    <li>Add this exact <b>Redirect URI</b> to the Spotify app — it must match character for character:
       <div class="copyrow"><code id="redirect-uri">{{ status.redirect_uri }}</code><button class="btn ghost small" data-copy="#redirect-uri">Copy</button></div>
-      {% if status.redirect_uri_from_env %}<span class="hint">Fixed by the <code>REDIRECT_URI</code> variable.</span>{% endif %}
+      <span class="hint" id="loopback-note" {% if not status.redirect_uri_is_loopback %}hidden{% endif %}>
+        Spotify only accepts <code>https</code> addresses or <code>http</code> on
+        <code>127.0.0.1</code> — a plain <code>http</code> LAN address or <code>localhost</code>
+        is refused as <i>insecure</i>. So authorisation runs over loopback regardless of the
+        address above; that address is still used for the Tesla link. Put this instance behind
+        HTTPS and the redirect URI follows it.
+      </span>
+      <span class="hint" id="redirect-hint">
+        {%- if status.redirect_uri_from_env %}Fixed by the <code>REDIRECT_URI</code> variable.{% endif -%}
+      </span>
     </li>
     <li>Tick <b>Web API</b>, save, then open <b>Settings</b> to reveal the Client ID and Client secret.</li>
   </ol>
   {% if status.credentials_from_env %}
     <p class="alert ok">Credentials are supplied by the <code>CLIENT_ID</code> / <code>CLIENT_SECRET</code> environment variables.</p>
   {% else %}
-  <form id="credentials-form" class="grid2">
-    <label>Client ID<input type="text" name="client_id" autocomplete="off" spellcheck="false" required></label>
-    <label>Client secret<input name="client_secret" type="password" autocomplete="off" spellcheck="false" required></label>
-    <button class="btn primary" type="submit">Save credentials</button>
-  </form>
-  <p class="hint">Stored in <code>/config/config.json</code> with owner-only permissions. Prefer environment variables? Set <code>CLIENT_ID</code> and <code>CLIENT_SECRET</code> instead and this form disappears.</p>
+  <div id="creds-block" {% if status.configured %}hidden{% endif %}>
+    <form id="credentials-form" class="grid2">
+      <label>Client ID<input type="text" name="client_id" autocomplete="off" spellcheck="false" required></label>
+      <label>Client secret<input name="client_secret" type="password" autocomplete="off" spellcheck="false" required></label>
+      <button class="btn primary" type="submit">Save credentials</button>
+    </form>
+    <p class="hint">Stored in <code>/config/config.json</code> with owner-only permissions. Prefer environment variables? Set <code>CLIENT_ID</code> and <code>CLIENT_SECRET</code> instead and this form disappears.</p>
+  </div>
+  <p class="alert ok" id="creds-saved" {% if not status.configured %}hidden{% endif %}>
+    Client ID and secret saved. <button class="link" id="creds-edit">Change them</button>
+  </p>
   {% endif %}
 </section>
 
@@ -55,7 +81,28 @@
   <h2>Authorise your account</h2>
   <p>You'll be sent to Spotify and straight back here. spoti-sort asks only to read and reorder your playlists — it can't touch your saved songs, follows, or account.</p>
   {% if status.auth_error %}<p class="alert error">{{ status.auth_error }}</p>{% endif %}
-  <a class="btn primary" href="{{ url_for('connect') }}">Authorise with Spotify</a>
+  <p class="alert error" id="address-mismatch" hidden style="margin-bottom:12px">
+    The address above hasn't been saved, so authorising would send
+    <code id="mismatch-server"></code> while your Spotify app expects
+    <code id="mismatch-form"></code>. Saving happens automatically when you click below.
+  </p>
+  <a class="btn primary" id="connect-link" href="{{ url_for('connect') }}">Authorise with Spotify</a>
+
+  <div id="manual-exchange" {% if not status.redirect_uri_is_loopback %}hidden{% endif %}>
+    <p class="hint" style="margin-top:14px">
+      <b>Not on the machine running spoti-sort?</b> Spotify will send you to
+      <code id="loopback-target">127.0.0.1</code> afterwards, which only resolves there — so
+      the page won't load. That's expected. Copy the address it failed on out of the
+      browser bar and paste it here; the code is in it.
+    </p>
+    <div class="urlrow">
+      <input type="text" id="manual-code" placeholder="http://127.0.0.1:8080/callback?code=AQD…"
+             autocomplete="off" spellcheck="false">
+      <button class="btn ghost small" id="manual-submit">Finish</button>
+    </div>
+    <span class="hint">Codes are single-use and expire within a minute or two — if it fails, just authorise again for a fresh one.</span>
+  </div>
+
   <p class="hint">The refresh token is kept in <code>/config/tokens.json</code>, so this survives restarts. Mount that directory or you'll be doing this again after every update.</p>
 </section>
 
@@ -90,7 +137,8 @@
 
   <section class="card">
     <h2>Playlists</h2>
-    <p class="muted">Pick the ones to keep sorted, each with its own order. Only playlists you own or that are collaborative can be reordered — the rest are shown greyed out.</p>
+    <p class="muted">Two independent switches per playlist. <b>Sort</b> keeps it in date order on the schedule below. <b>Car</b> offers it as a one-tap target on the Tesla page. Use either, both, or neither — a playlist you only ever add to never has to be reordered.</p>
+    <p class="muted small">Only playlists you own or that are collaborative can be touched; the rest are greyed out.</p>
     <div class="toolbar">
       <input type="search" id="filter" placeholder="Filter playlists…" autocomplete="off">
       <span class="count" id="selcount"></span>
@@ -130,6 +178,34 @@
     <label class="check"><input type="checkbox" id="run-on-start"> Sort once at container start</label>
   </section>
 
+  <section class="card" id="security-card">
+    <h2>Access</h2>
+    <p class="alert error" id="auth-warning" hidden style="margin-bottom:12px">
+      <b>No password set.</b> This instance is reachable at an address other than
+      <code>127.0.0.1</code>, so anyone who can reach it can reorder your playlists. Set a
+      password before exposing it beyond your own network.
+    </p>
+    <p class="alert ok" id="auth-on" hidden style="margin-bottom:12px">A password is required to open this page.</p>
+
+    <div id="auth-env" hidden>
+      <p class="muted">The password comes from the <code>UI_PASSWORD</code> environment variable. Change it there.</p>
+    </div>
+
+    <form id="password-form">
+      <div class="grid2">
+        <label id="current-wrap" hidden>Current password
+          <input type="password" name="current" autocomplete="current-password">
+        </label>
+        <label>New password
+          <input type="password" name="password" autocomplete="new-password" minlength="8">
+          <span class="hint">At least 8 characters. Leave empty and save to remove the password.</span>
+        </label>
+      </div>
+      <button class="btn primary" type="submit">Save password</button>
+    </form>
+    <p class="hint">Stored as a salted PBKDF2 hash, never in plain text. Repeated wrong guesses lock out that address for increasingly long periods. If you put this behind a reverse proxy, set <code>TRUST_PROXY=1</code> so HTTPS and client addresses are read correctly.</p>
+  </section>
+
   <section class="card">
     <h2>Tesla page</h2>
     <p class="muted">A single bookmarkable page for the car: it shows what's playing and adds it to one of your enabled playlists with one tap. The link carries its own access key, so the car never has to log in.</p>
@@ -164,6 +240,9 @@
 {% endblock %}
 
 {% block scripts %}
-<script>window.__STATUS__ = {{ status|tojson }};</script>
+{# A JSON data block, not an inline script: the Content-Security-Policy is
+   `script-src 'self'`, which blocks executable inline scripts. `tojson` is
+   HTML-safe, so a playlist named "</script>" can't break out. #}
+<script type="application/json" id="bootstrap">{{ bootstrap|tojson }}</script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 {% endblock %}

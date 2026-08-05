@@ -156,6 +156,11 @@ class ParsePlaylistIdsTest(unittest.TestCase):
         self.assertEqual(parse_playlist_ids("  , ,\n"), [])
 
 
+def pairs(entries):
+    """(id, order) view of entries, so tests don't break when fields are added."""
+    return [(e["id"], e["order"]) for e in entries]
+
+
 class NormaliseEntriesTest(unittest.TestCase):
     def normalise(self, raw, default="newest_first"):
         from spotisort.config import normalise_entries
@@ -163,29 +168,26 @@ class NormaliseEntriesTest(unittest.TestCase):
 
     def test_bare_ids_migrate_to_the_default_order(self):
         # The pre-per-playlist-order config format.
-        self.assertEqual(self.normalise(["aaa", "bbb"], "oldest_first"), [
-            {"id": "aaa", "order": "oldest_first"},
-            {"id": "bbb", "order": "oldest_first"},
-        ])
+        self.assertEqual(pairs(self.normalise(["aaa", "bbb"], "oldest_first")),
+                         [("aaa", "oldest_first"), ("bbb", "oldest_first")])
 
     def test_each_entry_keeps_its_own_order(self):
         raw = [{"id": "aaa", "order": "oldest_first"}, {"id": "bbb", "order": "newest_first"}]
-        self.assertEqual(self.normalise(raw, "newest_first"), raw)
+        self.assertEqual(pairs(self.normalise(raw, "newest_first")),
+                         [("aaa", "oldest_first"), ("bbb", "newest_first")])
 
     def test_unknown_order_falls_back_to_the_default(self):
-        self.assertEqual(self.normalise([{"id": "aaa", "order": "sideways"}], "oldest_first"),
-                         [{"id": "aaa", "order": "oldest_first"}])
+        self.assertEqual(pairs(self.normalise([{"id": "aaa", "order": "sideways"}], "oldest_first")),
+                         [("aaa", "oldest_first")])
 
     def test_mixed_formats_and_urls(self):
         raw = ["aaa", {"id": "https://open.spotify.com/playlist/bbb?si=1", "order": "oldest_first"}]
-        self.assertEqual(self.normalise(raw), [
-            {"id": "aaa", "order": "newest_first"},
-            {"id": "bbb", "order": "oldest_first"},
-        ])
+        self.assertEqual(pairs(self.normalise(raw)),
+                         [("aaa", "newest_first"), ("bbb", "oldest_first")])
 
     def test_first_occurrence_of_a_duplicate_wins(self):
         raw = [{"id": "aaa", "order": "oldest_first"}, {"id": "aaa", "order": "newest_first"}]
-        self.assertEqual(self.normalise(raw), [{"id": "aaa", "order": "oldest_first"}])
+        self.assertEqual(pairs(self.normalise(raw)), [("aaa", "oldest_first")])
 
     def test_junk_is_dropped(self):
         self.assertEqual(self.normalise([None, 42, {}, {"id": ""}, ""]), [])
@@ -255,10 +257,31 @@ class TeslaTokenTest(unittest.TestCase):
         cfg.clear_tesla_token()
         self.assertEqual(cfg.tesla_url, "")
 
-    def test_public_url_drives_the_redirect_uri(self):
+    def test_https_public_url_drives_the_redirect_uri(self):
         cfg = self.load()
         cfg.update(public_url="https://spoti.example.com")
         self.assertEqual(cfg.redirect_uri, "https://spoti.example.com/callback")
+        self.assertFalse(cfg.redirect_uri_is_loopback)
+
+    def test_http_lan_address_falls_back_to_loopback(self):
+        # Spotify rejects plain http to anything but a loopback literal with
+        # "Insecure redirect URI", so the LAN address must not be used here.
+        cfg = self.load()
+        cfg.update(public_url="http://192.168.1.50:8080")
+        self.assertEqual(cfg.redirect_uri, "http://127.0.0.1:8080/callback")
+        self.assertTrue(cfg.redirect_uri_is_loopback)
+
+    def test_http_hostname_also_falls_back(self):
+        cfg = self.load()
+        cfg.update(public_url="http://spoti.example.com")
+        self.assertEqual(cfg.redirect_uri, "http://127.0.0.1:8080/callback")
+
+    def test_the_public_address_is_still_used_for_the_tesla_link(self):
+        # Only the redirect URI is constrained; the car page is a plain web page.
+        cfg = self.load()
+        cfg.update(public_url="http://192.168.1.50:8080")
+        cfg.new_tesla_token()
+        self.assertTrue(cfg.tesla_url.startswith("http://192.168.1.50:8080/tesla/"))
 
     def test_redirect_uri_env_overrides_public_url(self):
         cfg = self.load()
@@ -273,6 +296,28 @@ class TeslaTokenTest(unittest.TestCase):
 
     def test_default_redirect_uri_is_loopback(self):
         self.assertEqual(self.load().redirect_uri, "http://127.0.0.1:8080/callback")
+
+    def test_url_parts_split_for_the_setup_form(self):
+        cfg = self.load()
+        self.assertEqual(cfg.public_url_parts, {"scheme": "http", "host": "127.0.0.1:8080"})
+        cfg.update(public_url="https://spoti.example.com")
+        self.assertEqual(cfg.public_url_parts, {"scheme": "https", "host": "spoti.example.com"})
+
+    def test_url_parts_keep_a_reverse_proxy_subpath(self):
+        cfg = self.load()
+        cfg.update(public_url="https://example.com/spotisort")
+        self.assertEqual(cfg.public_url_parts,
+                         {"scheme": "https", "host": "example.com/spotisort"})
+
+    def test_parts_round_trip_through_clean_public_url(self):
+        from spotisort.config import clean_public_url
+        cfg = self.load()
+        for url in ("https://spoti.example.com", "http://192.168.1.50:8080",
+                    "https://example.com/spotisort"):
+            cfg.update(public_url=url)
+            parts = cfg.public_url_parts
+            # What the form composes must normalise back to what was stored.
+            self.assertEqual(clean_public_url("%s://%s" % (parts["scheme"], parts["host"])), url)
 
 
 class ScopeTest(unittest.TestCase):
@@ -296,6 +341,193 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual(missing_scopes(None), SCOPE.split())
 
 
+class IndependentRolesTest(unittest.TestCase):
+    """Sorting and Tesla quick-add are separate opt-ins per playlist."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        for var in ("PLAYLIST_IDS", "SORT_ORDER", "INTERVAL_MINUTES", "PUBLIC_URL"):
+            os.environ.pop(var, None)
+
+    def load(self):
+        from spotisort.config import Config
+        return Config(self.tmp)
+
+    def ids(self, entries):
+        return [e["id"] for e in entries]
+
+    def test_config_without_the_flags_keeps_doing_both(self):
+        # Anything written before the split was sorted *and* offered on the car page.
+        import json
+        with open(os.path.join(self.tmp, "config.json"), "w") as fh:
+            json.dump({"playlists": [{"id": "aaa", "order": "newest_first"}]}, fh)
+        cfg = self.load()
+        self.assertEqual(self.ids(cfg.sort_entries), ["aaa"])
+        self.assertEqual(self.ids(cfg.add_entries), ["aaa"])
+
+    def test_bare_ids_also_default_to_both(self):
+        cfg = self.load()
+        cfg.set_entries(["aaa"])
+        self.assertEqual(self.ids(cfg.sort_entries), ["aaa"])
+        self.assertEqual(self.ids(cfg.add_entries), ["aaa"])
+
+    def test_sort_only(self):
+        cfg = self.load()
+        cfg.set_entries([{"id": "aaa", "sort": True, "add": False}])
+        self.assertEqual(self.ids(cfg.sort_entries), ["aaa"])
+        self.assertEqual(self.ids(cfg.add_entries), [])
+
+    def test_add_only_is_never_reordered(self):
+        # The point of the split: a playlist you only ever throw tracks into.
+        cfg = self.load()
+        cfg.set_entries([{"id": "aaa", "sort": False, "add": True}])
+        self.assertEqual(self.ids(cfg.sort_entries), [])
+        self.assertEqual(self.ids(cfg.add_entries), ["aaa"])
+
+    def test_the_two_sets_can_be_disjoint(self):
+        cfg = self.load()
+        cfg.set_entries([
+            {"id": "sorted-only", "sort": True, "add": False},
+            {"id": "car-only", "sort": False, "add": True},
+            {"id": "both", "sort": True, "add": True},
+        ])
+        self.assertEqual(self.ids(cfg.sort_entries), ["sorted-only", "both"])
+        self.assertEqual(self.ids(cfg.add_entries), ["car-only", "both"])
+
+    def test_neither_role_means_deselected(self):
+        cfg = self.load()
+        cfg.set_entries([{"id": "aaa", "sort": False, "add": False}])
+        self.assertEqual(cfg.entries, [])
+
+    def test_roles_survive_a_restart(self):
+        cfg = self.load()
+        cfg.set_entries([{"id": "aaa", "sort": False, "add": True}])
+        reloaded = self.load()
+        self.assertEqual(self.ids(reloaded.sort_entries), [])
+        self.assertEqual(self.ids(reloaded.add_entries), ["aaa"])
+
+    def test_favourite_and_recency_still_work_on_an_add_only_playlist(self):
+        cfg = self.load()
+        cfg.set_entries([{"id": "aaa", "sort": False, "add": True}])
+        self.assertTrue(cfg.set_favorite("aaa", True))
+        cfg.touch_entry("aaa")
+        entry = self.load().add_entries[0]
+        self.assertTrue(entry["favorite"])
+        self.assertGreater(entry["last_used"], 0)
+
+
+class PasswordTest(unittest.TestCase):
+    def test_round_trip(self):
+        from spotisort.security import hash_password, verify_password
+        stored = hash_password("correct horse battery")
+        self.assertTrue(verify_password("correct horse battery", stored))
+        self.assertFalse(verify_password("wrong", stored))
+
+    def test_hash_is_salted(self):
+        from spotisort.security import hash_password
+        self.assertNotEqual(hash_password("same"), hash_password("same"))
+
+    def test_plaintext_is_not_stored(self):
+        from spotisort.security import hash_password
+        self.assertNotIn("hunter2", hash_password("hunter2"))
+
+    def test_garbage_never_verifies(self):
+        from spotisort.security import verify_password
+        for stored in ("", "nonsense", "md5$1$aa$bb", "pbkdf2_sha256$x$y$z"):
+            self.assertFalse(verify_password("anything", stored), stored)
+
+    def test_empty_password_never_verifies(self):
+        from spotisort.security import hash_password, verify_password
+        self.assertFalse(verify_password("", hash_password("x")))
+
+
+class LoginLimiterTest(unittest.TestCase):
+    def test_lockout_kicks_in_after_repeated_failures(self):
+        from spotisort.security import MAX_FAILURES, LoginLimiter
+        limiter = LoginLimiter()
+        for _ in range(MAX_FAILURES - 1):
+            self.assertEqual(limiter.record_failure("1.2.3.4"), 0.0)
+        self.assertGreater(limiter.record_failure("1.2.3.4"), 0)
+        self.assertGreater(limiter.retry_after("1.2.3.4"), 0)
+
+    def test_lockout_grows(self):
+        from spotisort.security import MAX_FAILURES, LoginLimiter
+        limiter = LoginLimiter()
+        delays = [limiter.record_failure("x") for _ in range(MAX_FAILURES + 3)]
+        self.assertGreater(delays[-1], delays[MAX_FAILURES - 1])
+
+    def test_success_clears_and_addresses_are_independent(self):
+        from spotisort.security import MAX_FAILURES, LoginLimiter
+        limiter = LoginLimiter()
+        for _ in range(MAX_FAILURES):
+            limiter.record_failure("bad")
+        self.assertEqual(limiter.retry_after("other"), 0.0)
+        limiter.record_success("bad")
+        self.assertEqual(limiter.retry_after("bad"), 0.0)
+
+
+class FavoritesAndRecencyTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        for var in ("PLAYLIST_IDS", "SORT_ORDER", "INTERVAL_MINUTES", "PUBLIC_URL"):
+            os.environ.pop(var, None)
+
+    def load(self):
+        from spotisort.config import Config
+        return Config(self.tmp)
+
+    def test_defaults(self):
+        cfg = self.load()
+        cfg.set_entries(["aaa"])
+        self.assertEqual(cfg.entries[0]["favorite"], False)
+        self.assertEqual(cfg.entries[0]["last_used"], 0.0)
+
+    def test_favorite_and_recency_persist(self):
+        cfg = self.load()
+        cfg.set_entries(["aaa", "bbb"])
+        cfg.set_favorite("aaa", True)
+        cfg.touch_entry("bbb")
+        reloaded = self.load().entries
+        self.assertTrue(reloaded[0]["favorite"])
+        self.assertGreater(reloaded[1]["last_used"], 0)
+
+    def test_saving_a_selection_keeps_usage_history(self):
+        # The UI re-sends the selection on every save and knows nothing about
+        # last_used; it must not be wiped.
+        cfg = self.load()
+        cfg.set_entries(["aaa"])
+        cfg.touch_entry("aaa")
+        used = cfg.entries[0]["last_used"]
+        cfg.set_entries([{"id": "aaa", "order": "oldest_first"}])
+        self.assertEqual(cfg.entries[0]["last_used"], used)
+
+    def test_saving_bare_ids_keeps_favourites(self):
+        cfg = self.load()
+        cfg.set_entries(["aaa"])
+        cfg.set_favorite("aaa", True)
+        cfg.set_entries(["aaa", "bbb"])
+        self.assertTrue(cfg.entries[0]["favorite"])
+
+    def test_explicit_favorite_false_clears_it(self):
+        cfg = self.load()
+        cfg.set_entries(["aaa"])
+        cfg.set_favorite("aaa", True)
+        cfg.set_entries([{"id": "aaa", "favorite": False}])
+        self.assertFalse(cfg.entries[0]["favorite"])
+
+    def test_favorite_on_unknown_playlist_reports_failure(self):
+        cfg = self.load()
+        self.assertFalse(cfg.set_favorite("nope", True))
+
+    def test_is_public(self):
+        cfg = self.load()
+        self.assertFalse(cfg.is_public)
+        cfg.update(public_url="http://192.168.1.50:8080")
+        self.assertTrue(cfg.is_public)
+
+
 class ConfigMigrationTest(unittest.TestCase):
     def setUp(self):
         import tempfile
@@ -315,38 +547,30 @@ class ConfigMigrationTest(unittest.TestCase):
     def test_old_config_is_migrated_in_place(self):
         self.write({"playlists": ["aaa", "bbb"], "order": "oldest_first"})
         cfg = self.load()
-        self.assertEqual(cfg.entries, [
-            {"id": "aaa", "order": "oldest_first"},
-            {"id": "bbb", "order": "oldest_first"},
-        ])
+        self.assertEqual(pairs(cfg.entries),
+                         [("aaa", "oldest_first"), ("bbb", "oldest_first")])
         self.assertEqual(cfg.playlists, ["aaa", "bbb"])
 
     def test_per_playlist_orders_survive_a_reload(self):
         cfg = self.load()
         cfg.set_entries([{"id": "aaa", "order": "oldest_first"}, "bbb"])
-        self.assertEqual(self.load().entries, [
-            {"id": "aaa", "order": "oldest_first"},
-            {"id": "bbb", "order": "newest_first"},
-        ])
+        self.assertEqual(pairs(self.load().entries),
+                         [("aaa", "oldest_first"), ("bbb", "newest_first")])
 
     def test_changing_the_default_leaves_existing_playlists_alone(self):
         cfg = self.load()
         cfg.set_entries(["aaa"])
         cfg.update(order="oldest_first")
         cfg.set_entries(cfg.entries + ["bbb"])
-        self.assertEqual(cfg.entries, [
-            {"id": "aaa", "order": "newest_first"},
-            {"id": "bbb", "order": "oldest_first"},
-        ])
+        self.assertEqual(pairs(cfg.entries),
+                         [("aaa", "newest_first"), ("bbb", "oldest_first")])
 
     def test_playlist_ids_env_seeds_with_the_default_order(self):
         os.environ["PLAYLIST_IDS"] = "aaa bbb"
         os.environ["SORT_ORDER"] = "oldest_first"
         try:
-            self.assertEqual(self.load().entries, [
-                {"id": "aaa", "order": "oldest_first"},
-                {"id": "bbb", "order": "oldest_first"},
-            ])
+            self.assertEqual(pairs(self.load().entries),
+                             [("aaa", "oldest_first"), ("bbb", "oldest_first")])
         finally:
             del os.environ["PLAYLIST_IDS"], os.environ["SORT_ORDER"]
 

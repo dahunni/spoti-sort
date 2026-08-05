@@ -25,6 +25,7 @@ like the one in a Tesla.
 - [Configuration](#configuration)
 - [The Tesla page](#tesla)
 - [How the sorting works](#how)
+- [Spotify API notes](#apinotes)
 - [Development](#development)
 - [Built using](#built_using)
 - [Authors](#authors)
@@ -72,17 +73,41 @@ app, tick **Web API**, and add the redirect URI shown in the UI — by default:
 http://127.0.0.1:8080/callback
 ```
 
-It must match character for character. Use `127.0.0.1`, not `localhost`: Spotify no
-longer accepts `localhost` for new apps.
+It must match character for character.
+
+**Spotify only accepts an HTTPS redirect URI, or HTTP on a loopback literal**
+(`127.0.0.1`, `[::1]`). A plain `http://` LAN address — or `localhost` — is refused with
+*"Insecure redirect URI"*. So authorisation runs over `127.0.0.1` no matter what address
+you reach the UI on; only the redirect URI is constrained, and your address is still used
+for the Tesla link. Put the instance behind HTTPS and the redirect URI follows it
+automatically.
+
+If you're setting up from another machine, the callback will land on a `127.0.0.1` page
+that can't load — that's expected. Copy the failed address out of the browser bar and
+paste it into **Finish** on the authorise card; the code is in it.
 
 Copy the Client ID and secret into the UI (or set them as environment variables), click
 **Authorise with Spotify**, and pick your playlists. That's it — no shell, no manual
 first-run script.
 
+### 4. Choose what each playlist is for
+
+Every playlist has two independent switches:
+
+| Switch | Effect |
+| --- | --- |
+| **Sort** | Kept in date-added order on the schedule, with its own order direction. |
+| **Car** | Offered as a one-tap target on the [Tesla page](#tesla), with an optional ★. |
+
+They're unrelated. A "Discoveries" playlist you throw tracks into from the car never has
+to be reordered; a big archive you keep in date order never has to clutter the car screen.
+Turn both off and the playlist is simply deselected.
+
 > **Reaching the UI on another address?** If you browse to `http://192.168.1.50:8080` or
 > through a reverse proxy, type that address into the **address** field in step 2 of the
-> setup card — the redirect URI below it updates to match, and that's the value to paste
-> into Spotify. `PUBLIC_URL` does the same from the environment.
+> setup card; `PUBLIC_URL` does the same from the environment. That address drives the
+> Tesla link. The redirect URI below it only follows the address when it is HTTPS —
+> otherwise it stays on loopback, because that is all Spotify accepts.
 
 ## ⚙️ Configuration <a name="configuration"></a>
 
@@ -93,12 +118,13 @@ precedence where both exist.
 | --- | --- | --- |
 | `CLIENT_ID` | – | Spotify app client ID. Settable in the UI instead. |
 | `CLIENT_SECRET` | – | Spotify app client secret. Settable in the UI instead. |
-| `PUBLIC_URL` | – | Address the UI is actually reached on, e.g. `http://192.168.1.50:8080`. Settable in the UI instead. Drives the redirect URI and the Tesla link. |
-| `REDIRECT_URI` | `$PUBLIC_URL/callback` | Only needed when the callback address differs from `PUBLIC_URL`. Must match the Spotify app exactly. |
+| `PUBLIC_URL` | – | Address the UI is actually reached on, e.g. `http://192.168.1.50:8080`. Settable in the UI instead. Drives the Tesla link, and the redirect URI when it is HTTPS. |
+| `REDIRECT_URI` | `$PUBLIC_URL/callback` if HTTPS, else `http://127.0.0.1:$PORT/callback` | Overrides the choice entirely. Must match the Spotify app exactly, and Spotify requires HTTPS or a loopback literal. |
 | `PORT` | `8080` | Port the UI listens on. |
 | `HOST` | `0.0.0.0` | Bind address. |
 | `CONFIG_DIR` | `/config` | Where settings and the token are stored. |
-| `UI_PASSWORD` | – | If set, the UI asks for this password. |
+| `UI_PASSWORD` | – | If set, the UI asks for this password. Can be set in the UI instead, where it is stored as a PBKDF2 hash. |
+| `TRUST_PROXY` | – | Set to `1` behind a reverse proxy so `X-Forwarded-Proto`/`-For` are honoured. |
 | `PLAYLIST_IDS` | – | Seeds the playlist selection on first boot. Accepts ids, URLs or `spotify:` URIs, separated by commas or whitespace. |
 | `INTERVAL_MINUTES` | `60` | Overrides the schedule. |
 | `SORT_ORDER` | `newest_first` | Default order for newly selected playlists: `newest_first` or `oldest_first`. Per-playlist orders are set in the UI. |
@@ -106,10 +132,15 @@ precedence where both exist.
 
 ### A note on exposure
 
-The UI has no authentication unless you set `UI_PASSWORD`, and anyone who reaches it can
-reorder your playlists. Keep it on your LAN, or set a password before putting it behind a
-reverse proxy. The [Tesla page](#tesla) is authenticated by its own link instead, and
-`UI_PASSWORD` does not apply to it — that's what lets the car use it.
+Set a password in **Access** before exposing this beyond your own network — the UI warns
+you when it's reachable at a non-loopback address without one. Passwords are stored as
+salted PBKDF2 hashes, logins are CSRF-protected and rate-limited with an escalating
+lockout, and responses carry a strict CSP plus `X-Frame-Options`, `nosniff` and
+`no-referrer`. Behind a reverse proxy set `TRUST_PROXY=1` so HTTPS and client addresses
+are detected correctly.
+
+The [Tesla page](#tesla) is authenticated by its own link instead, and the password does
+not apply to it — that's what lets the car use it without signing in.
 
 ## 🚗 The Tesla page <a name="tesla"></a>
 
@@ -118,12 +149,22 @@ enabled playlists with one tap — useful because the Tesla player can't add to 
 at all.
 
 Open **Tesla page → Create link** in the UI and bookmark the resulting URL in the car's
-browser. The link contains its own access key, so the car never sees your Spotify login
-and never has to sign in — but that also means **anyone with the link can use it**. It is
-deliberately narrow: it can read what's playing and append to the playlists you've already
-enabled, and nothing else. It cannot change settings, reach your other playlists, remove
-tracks, or see your credentials. **Regenerate** invalidates the old link; **Turn off**
-disables the page entirely.
+browser. Buttons are ordered ★ favourites first, then whichever you added to most
+recently. Tap a playlist to add the current track; tap it again while it's green to undo,
+which removes exactly the copy that tap created.
+
+The link contains its own access key, so the car never sees your Spotify login and never
+has to sign in — but that also means **anyone with the link can use it**. It is
+deliberately narrow. It can:
+
+- read what's currently playing, and
+- append the current track to a playlist you marked **Car**, or undo an add it just made.
+
+It cannot change settings, reach playlists you didn't mark **Car**, delete anything it
+didn't add itself, or see your credentials. Undo only ever removes the one copy a tap
+created, and only while spoti-sort still holds the record for it — everything else in the
+playlist is untouchable from the car. **Regenerate** invalidates the old link; **Turn
+off** disables the page entirely.
 
 Set the public address first, or the link will point at `127.0.0.1`, which the car can't
 reach. The UI warns you when that's the case.
@@ -188,6 +229,24 @@ The stored form is a list of objects, so `config.json` stays hand-editable:
 
 Playlists you don't own and that aren't collaborative can't be reordered by anyone; the UI
 greys them out and runs report them as skipped.
+
+## 📡 Spotify API notes <a name="apinotes"></a>
+
+Spotify's 2026 Web API migration replaced `/playlists/{id}/tracks` with
+`/playlists/{id}/items` for every verb; the old path now returns a bare `403 Forbidden`.
+spoti-sort calls the new path directly rather than through spotipy's `playlist_items` /
+`playlist_add_items` / `playlist_reorder_items` helpers, which still target the old one.
+
+Two knock-on changes that show up in the UI:
+
+- Playlist entries key on `item`, not `track`.
+- Playlist objects no longer carry `tracks.total`, so the playlist picker shows no track
+  count. Fetching one would cost an API call per playlist. Run results still report exact
+  totals, since a sort reads the whole playlist anyway.
+
+If you see `403 Forbidden` on playlist endpoints while `/me` works, check that your Spotify
+app has **Web API** enabled and that your account is listed under **User Management** — a
+development-mode app only works for accounts you add, including your own.
 
 ## 🛠 Development <a name="development"></a>
 
