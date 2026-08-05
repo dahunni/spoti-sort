@@ -25,6 +25,7 @@ like the one in a Tesla.
 - [Configuration](#configuration)
 - [The Tesla page](#tesla)
 - [How the sorting works](#how)
+- [Spotify API notes](#apinotes)
 - [Development](#development)
 - [Built using](#built_using)
 - [Authors](#authors)
@@ -228,6 +229,24 @@ The stored form is a list of objects, so `config.json` stays hand-editable:
 
 Playlists you don't own and that aren't collaborative can't be reordered by anyone; the UI
 greys them out and runs report them as skipped.
+
+## 📡 Spotify API notes <a name="apinotes"></a>
+
+Spotify's 2026 Web API migration replaced `/playlists/{id}/tracks` with
+`/playlists/{id}/items` for every verb; the old path now returns a bare `403 Forbidden`.
+spoti-sort calls the new path directly rather than through spotipy's `playlist_items` /
+`playlist_add_items` / `playlist_reorder_items` helpers, which still target the old one.
+
+Two knock-on changes that show up in the UI:
+
+- Playlist entries key on `item`, not `track`.
+- Playlist objects no longer carry `tracks.total`, so the playlist picker shows no track
+  count. Fetching one would cost an API call per playlist. Run results still report exact
+  totals, since a sort reads the whole playlist anyway.
+
+If you see `403 Forbidden` on playlist endpoints while `/me` works, check that your Spotify
+app has **Web API** enabled and that your account is listed under **User Management** — a
+development-mode app only works for accounts you add, including your own.
 
 ## 🛠 Development <a name="development"></a>
 

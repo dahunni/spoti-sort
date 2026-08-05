@@ -39,6 +39,26 @@ class NotAuthenticated(Exception):
     pass
 
 
+# A token can be perfectly valid and every call still refused — most commonly
+# because the Spotify app is in Development mode, where only accounts added under
+# User Management may use it. That reads as "not connected" unless it is named.
+NOT_REGISTERED = "not_registered"
+
+
+def describe_account_error(exc: SpotifyException) -> Dict[str, str]:
+    message = (exc.msg or "").strip()
+    if exc.http_status == 403 and "not registered" in message.lower():
+        return {
+            "kind": NOT_REGISTERED,
+            "message": "Your Spotify account is not on this app's user list.",
+        }
+    if exc.http_status == 403:
+        return {"kind": "forbidden", "message": message or "Spotify refused the request."}
+    if exc.http_status == 401:
+        return {"kind": "expired", "message": "The stored authorisation is no longer valid."}
+    return {"kind": "error", "message": message or "Spotify returned HTTP %s." % exc.http_status}
+
+
 def make_oauth(client_id: str, client_secret: str, redirect_uri: str, cache_path: str) -> SpotifyOAuth:
     return SpotifyOAuth(
         client_id=client_id,
@@ -48,6 +68,20 @@ def make_oauth(client_id: str, client_secret: str, redirect_uri: str, cache_path
         cache_handler=CacheFileHandler(cache_path=cache_path),
         open_browser=False,
     )
+
+
+def _items_path(playlist_id: str) -> str:
+    """Path for a playlist's contents.
+
+    Spotify's 2026 migration replaced `/playlists/{id}/tracks` with
+    `/playlists/{id}/items` for every verb and started returning 403 on the old
+    path, so spotipy's `playlist_items` / `playlist_add_items` /
+    `playlist_reorder_items` helpers (which still target `/tracks`) cannot be used.
+    These calls go through spotipy's authenticated transport but build the path
+    and payloads here. Request bodies changed too: removal keys on `items`, not
+    `tracks`.
+    """
+    return "playlists/%s/items" % playlist_id
 
 
 def _retry(call: Callable[[], Any], what: str) -> Any:
@@ -111,7 +145,9 @@ class SpotifyClient:
                     "id": item["id"],
                     "name": item.get("name") or "(untitled)",
                     "owner": (item.get("owner") or {}).get("display_name") or owner or "",
-                    "total": (item.get("tracks") or {}).get("total", 0),
+                    # The 2026 migration dropped `tracks` from playlist objects, so
+                    # this is usually unknown now. Counting would cost a call each.
+                    "total": (item.get("tracks") or {}).get("total"),
                     "image": images[-1]["url"] if images else None,
                     "editable": owner == user_id or bool(item.get("collaborative")),
                 })
@@ -167,10 +203,12 @@ class SpotifyClient:
         occurrence of the track, which would delete a legitimate earlier copy.
         Costs one extra read per add, which is worth it to make undo safe.
         """
-        meta = self.playlist_meta(playlist_id)
-        position = int(((meta.get("tracks") or {}).get("total")) or 0)
-        response = _retry(lambda: self.sp.playlist_add_items(playlist_id, [uri]),
-                          "add to %s" % playlist_id)
+        # Appended at the end, so the current length is the new item's position.
+        position = self.playlist_total(playlist_id)
+        response = _retry(
+            lambda: self.sp._post(_items_path(playlist_id), payload={"uris": [uri]}),
+            "add to %s" % playlist_id,
+        )
         return {"position": position, "snapshot": (response or {}).get("snapshot_id")}
 
     def remove_from_playlist(self, playlist_id: str, uri: str, position: int,
@@ -181,29 +219,43 @@ class SpotifyClient:
         changed since (including one of our own sort runs) Spotify rejects this
         rather than removing the wrong row.
         """
+        payload: Dict[str, Any] = {"items": [{"uri": uri, "positions": [position]}]}
+        if snapshot:
+            payload["snapshot_id"] = snapshot
         _retry(
-            lambda: self.sp.playlist_remove_specific_occurrences_of_items(
-                playlist_id, [{"uri": uri, "positions": [position]}], snapshot_id=snapshot),
+            lambda: self.sp._delete(_items_path(playlist_id), payload=payload),
             "remove from %s" % playlist_id,
         )
 
     def playlist_meta(self, playlist_id: str) -> Dict[str, Any]:
+        # `tracks.total` no longer exists on playlist objects; use playlist_total().
         return _retry(
-            lambda: self.sp.playlist(playlist_id, fields="name,snapshot_id,collaborative,owner.id,tracks.total"),
+            lambda: self.sp.playlist(playlist_id, fields="name,snapshot_id,collaborative,owner.id"),
             "playlist %s" % playlist_id,
         )
 
+    def playlist_total(self, playlist_id: str) -> int:
+        """Number of entries, from the items paging object."""
+        page = _retry(
+            lambda: self.sp._get(_items_path(playlist_id), limit=1, fields="total"),
+            "count %s" % playlist_id,
+        )
+        return int((page or {}).get("total") or 0)
+
     def playlist_items(self, playlist_id: str) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
-        page = _retry(
-            lambda: self.sp.playlist_items(playlist_id, fields=ITEM_FIELDS, limit=100,
-                                           additional_types=("track", "episode")),
-            "items %s" % playlist_id,
-        )
-        items.extend(page.get("items") or [])
-        while page.get("next"):
-            page = _retry(lambda p=page: self.sp.next(p), "items %s" % playlist_id)
-            items.extend(page.get("items") or [])
+        offset = 0
+        while True:
+            page = _retry(
+                lambda o=offset: self.sp._get(
+                    _items_path(playlist_id), fields=ITEM_FIELDS, limit=100, offset=o),
+                "items %s" % playlist_id,
+            )
+            batch = page.get("items") or []
+            items.extend(batch)
+            if not page.get("next") or not batch:
+                break
+            offset += len(batch)
         return items
 
     def sort_playlist(self, playlist_id: str, order: str, dry_run: bool = False,
@@ -236,8 +288,10 @@ class SpotifyClient:
             local = list(range(len(items)))
             for range_start, insert_before in moves:
                 response = _retry(
-                    lambda s=range_start, b=insert_before, snap=snapshot: self.sp.playlist_reorder_items(
-                        playlist_id, s, b, range_length=1, snapshot_id=snap),
+                    lambda s=range_start, b=insert_before, snap=snapshot: self.sp._put(
+                        _items_path(playlist_id),
+                        payload=dict({"range_start": s, "insert_before": b, "range_length": 1},
+                                     **({"snapshot_id": snap} if snap else {}))),
                     "reorder %s" % playlist_id,
                 )
                 snapshot = (response or {}).get("snapshot_id", snapshot)

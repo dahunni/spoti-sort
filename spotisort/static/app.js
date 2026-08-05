@@ -143,9 +143,13 @@
       const art = p.image
         ? `<img class="art" src="${escape(p.image)}" alt="" loading="lazy">`
         : `<span class="art"></span>`;
+      // Spotify stopped returning track counts on playlist objects in 2026; omit
+      // the number rather than confidently printing "0 tracks".
+      const count = typeof p.total === "number"
+        ? `${p.total} track${p.total === 1 ? "" : "s"} · ` : "";
       const sub = p.editable
-        ? `${p.total} track${p.total === 1 ? "" : "s"} · ${escape(p.owner)}`
-        : `${p.total} tracks · owned by ${escape(p.owner)} — can't be reordered`;
+        ? `${count}${escape(p.owner)}`
+        : `${count}owned by ${escape(p.owner)} — can't be reordered`;
       const order = (chosen && chosen.order) || state.status.default_order || "newest_first";
       const fav = state.favorites.has(p.id);
       row.innerHTML =

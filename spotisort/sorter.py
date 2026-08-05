@@ -19,9 +19,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 log = logging.getLogger(__name__)
 
-# Only what we actually need. Episodes carry `name` too; anything unavailable
-# comes back as null and is handled by `_sort_key`.
-ITEM_FIELDS = "next,items(added_at,track(id,name))"
+# Only what we actually need. Spotify's 2026 migration renamed the per-entry key
+# from `track` to `item`; episodes carry `name` too, and anything unavailable comes
+# back as null and is handled by `_sort_key`.
+ITEM_FIELDS = "next,items(added_at,item(id,name))"
 
 NEWEST_FIRST = "newest_first"
 OLDEST_FIRST = "oldest_first"
