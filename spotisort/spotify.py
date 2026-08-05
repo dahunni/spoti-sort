@@ -5,14 +5,15 @@ from __future__ import annotations
 import logging
 import random
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 
 import spotipy
 from spotipy.cache_handler import CacheFileHandler
 from spotipy.exceptions import SpotifyException
 from spotipy.oauth2 import SpotifyOAuth
 
-from .sorter import ITEM_FIELDS, PlaylistResult, RunResult, apply_move, plan_moves
+from .sorter import (ITEM_FIELDS, NEWEST_FIRST, OLDEST_FIRST, PlaylistResult,
+                     RunResult, apply_move, item_uri, plan_moves)
 
 log = logging.getLogger(__name__)
 
@@ -194,14 +195,18 @@ class SpotifyClient:
             "addable": bool(item.get("uri")) and not item.get("is_local"),
         }
 
-    def add_to_playlist(self, playlist_id: str, uri: str) -> Dict[str, Any]:
-        """Append a track and return what's needed to undo it exactly.
+    def add_to_playlist(self, playlist_id: str, uri: str,
+                        order: str = NEWEST_FIRST) -> Dict[str, Any]:
+        """Add a track where the playlist's own sort order says it belongs.
 
-        The item lands at the end, so the current length is its position. Knowing
-        that lets an undo remove *that* copy via
-        ``playlist_remove_specific_occurrences_of_items`` rather than every
-        occurrence of the track, which would delete a legitimate earlier copy.
-        Costs one extra read per add, which is worth it to make undo safe.
+        Spotify always appends, which is right for an oldest-first playlist and
+        exactly wrong for a newest-first one — the track you just added would sit
+        at the bottom until the next scheduled run. So a newest-first playlist gets
+        one extra move to the front, leaving it consistent immediately.
+
+        Returns what an undo needs: the position the track actually ended up at,
+        and the snapshot right after, so the undo removes that copy and not an
+        older copy of the same track.
         """
         # Appended at the end, so the current length is the new item's position.
         position = self.playlist_total(playlist_id)
@@ -209,7 +214,22 @@ class SpotifyClient:
             lambda: self.sp._post(_items_path(playlist_id), payload={"uris": [uri]}),
             "add to %s" % playlist_id,
         )
-        return {"position": position, "snapshot": (response or {}).get("snapshot_id")}
+        snapshot = (response or {}).get("snapshot_id")
+
+        if order != OLDEST_FIRST and position > 0:
+            moved = _retry(
+                lambda: self.sp._put(_items_path(playlist_id), payload=dict(
+                    {"range_start": position, "insert_before": 0, "range_length": 1},
+                    **({"snapshot_id": snapshot} if snapshot else {}))),
+                "reorder new item %s" % playlist_id,
+            )
+            snapshot = (moved or {}).get("snapshot_id", snapshot)
+            position = 0
+        return {"position": position, "snapshot": snapshot}
+
+    def playlist_uris(self, playlist_id: str) -> Set[str]:
+        """Every playable URI in the playlist, for duplicate checks."""
+        return {u for u in (item_uri(i) for i in self.playlist_items(playlist_id)) if u}
 
     def remove_from_playlist(self, playlist_id: str, uri: str, position: int,
                              snapshot: Optional[str]) -> None:
@@ -272,6 +292,9 @@ class SpotifyClient:
 
             items = self.playlist_items(playlist_id)
             result.total = len(items)
+            # The read is already paid for; hand the URI set back so the duplicate
+            # check on the Tesla page gets a free refresh.
+            result.uris = {u for u in (item_uri(i) for i in items) if u}
             moves = plan_moves([i.get("added_at") for i in items], order)
             if not moves:
                 result.detail = "already in order"

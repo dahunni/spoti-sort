@@ -38,6 +38,10 @@ DEFAULTS: Dict[str, Any] = {
     "public_url": "",
     # Bearer token embedded in the Tesla page URL so the car can bookmark it.
     "tesla_token": "",
+    # Whether the "save this to your favourites" instruction has been dismissed.
+    # Kept server-side on purpose: the Tesla browser routinely loses cookies and
+    # local storage, so a client-side flag would reappear on every drive.
+    "tesla_onboarded": False,
     # PBKDF2 hash of the UI password when set through the web UI. The UI_PASSWORD
     # environment variable is an alternative and takes precedence.
     "ui_password_hash": "",
@@ -269,11 +273,19 @@ class Config:
         token = self.tesla_token
         return self.base_url + "/tesla/" + token if token else ""
 
+    @property
+    def tesla_onboarded(self) -> bool:
+        return bool(self._data["tesla_onboarded"])
+
+    def mark_tesla_onboarded(self) -> None:
+        self.update(tesla_onboarded=True)
+
     def new_tesla_token(self) -> str:
         # url-safe and long enough that guessing it is not a concern; it is the
         # only credential the car presents.
         token = secrets.token_urlsafe(24)
-        self.update(tesla_token=token)
+        # A fresh link has to be bookmarked again, so the instruction comes back.
+        self.update(tesla_token=token, tesla_onboarded=False)
         return token
 
     def clear_tesla_token(self) -> None:
