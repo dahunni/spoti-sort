@@ -417,6 +417,104 @@ class IndependentRolesTest(unittest.TestCase):
         self.assertGreater(entry["last_used"], 0)
 
 
+class AddPositionTest(unittest.TestCase):
+    """A track added from the car must land where the playlist's order says."""
+
+    class FakeSp:
+        def __init__(self, total):
+            self.total = total
+            self.calls = []
+
+        def _get(self, path, **kw):
+            self.calls.append(("GET", path, kw))
+            return {"total": self.total}
+
+        def _post(self, path, payload=None):
+            self.calls.append(("POST", path, payload))
+            return {"snapshot_id": "after-add"}
+
+        def _put(self, path, payload=None):
+            self.calls.append(("PUT", path, payload))
+            return {"snapshot_id": "after-move"}
+
+    def client(self, total):
+        from spotisort.spotify import SpotifyClient
+        c = SpotifyClient.__new__(SpotifyClient)
+        c.sp = self.FakeSp(total)
+        c._me = None
+        return c
+
+    def test_newest_first_moves_the_new_track_to_the_front(self):
+        c = self.client(12)
+        info = c.add_to_playlist("pl", "spotify:track:x", "newest_first")
+        verbs = [v for v, _, _ in c.sp.calls]
+        self.assertEqual(verbs, ["GET", "POST", "PUT"])
+        move = c.sp.calls[2][2]
+        self.assertEqual(move["range_start"], 12)   # appended at the end...
+        self.assertEqual(move["insert_before"], 0)  # ...then moved to the front
+        self.assertEqual(move["snapshot_id"], "after-add")
+        # Undo has to target where it actually ended up, not where it landed first.
+        self.assertEqual(info["position"], 0)
+        self.assertEqual(info["snapshot"], "after-move")
+
+    def test_oldest_first_leaves_it_appended(self):
+        c = self.client(12)
+        info = c.add_to_playlist("pl", "spotify:track:x", "oldest_first")
+        self.assertEqual([v for v, _, _ in c.sp.calls], ["GET", "POST"])
+        self.assertEqual(info["position"], 12)
+        self.assertEqual(info["snapshot"], "after-add")
+
+    def test_empty_playlist_needs_no_move(self):
+        c = self.client(0)
+        info = c.add_to_playlist("pl", "spotify:track:x", "newest_first")
+        self.assertEqual([v for v, _, _ in c.sp.calls], ["GET", "POST"])
+        self.assertEqual(info["position"], 0)
+
+    def test_uses_the_new_items_endpoint(self):
+        c = self.client(3)
+        c.add_to_playlist("pl", "spotify:track:x", "newest_first")
+        for _, path, _ in c.sp.calls:
+            self.assertEqual(path, "playlists/pl/items")
+
+
+class ItemUriTest(unittest.TestCase):
+    def test_reads_the_migrated_item_key(self):
+        from spotisort.sorter import item_uri
+        self.assertEqual(item_uri({"item": {"uri": "spotify:track:x"}}), "spotify:track:x")
+
+    def test_missing_or_local_entries_have_no_uri(self):
+        from spotisort.sorter import item_uri
+        for entry in ({}, {"item": None}, {"item": {}}, None):
+            self.assertIsNone(item_uri(entry))
+
+
+class TeslaOnboardingTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        for var in ("PUBLIC_URL", "UI_PASSWORD"):
+            os.environ.pop(var, None)
+
+    def load(self):
+        from spotisort.config import Config
+        return Config(self.tmp)
+
+    def test_starts_not_onboarded_and_persists_once_dismissed(self):
+        cfg = self.load()
+        cfg.new_tesla_token()
+        self.assertFalse(cfg.tesla_onboarded)
+        cfg.mark_tesla_onboarded()
+        # Server-side: the car loses local storage, so this must survive a restart.
+        self.assertTrue(self.load().tesla_onboarded)
+
+    def test_regenerating_asks_again(self):
+        cfg = self.load()
+        cfg.new_tesla_token()
+        cfg.mark_tesla_onboarded()
+        cfg.new_tesla_token()
+        self.assertFalse(cfg.tesla_onboarded)
+
+
 class PasswordTest(unittest.TestCase):
     def test_round_trip(self):
         from spotisort.security import hash_password, verify_password

@@ -37,6 +37,11 @@ NOW_PLAYING_TTL = 4.0
 # duplicate, so remember recent adds and refuse the repeat.
 ADD_GUARD_SECONDS = 900
 
+# How long a playlist's set of track URIs is trusted before being re-read. Reading
+# one costs a call per 100 tracks, so this is deliberately generous; our own adds
+# and removals update the set in place, and a sort run refreshes it for free.
+MEMBERSHIP_TTL = 900.0
+
 
 class App:
     def __init__(self, config: Config):
@@ -48,6 +53,8 @@ class App:
         self._now: Dict[str, Any] = {}
         self._now_at = 0.0
         self._recent_adds: Dict[str, float] = {}
+        # playlist id -> (fetched_at, set of track URIs)
+        self._members: Dict[str, Any] = {}
 
         state = config.load_state()
         self.scheduler = Scheduler(self.run_sort, config.interval_minutes, self._store_run)
@@ -122,12 +129,45 @@ class App:
             out.append({
                 "id": entry["id"],
                 "name": (meta or {}).get("name") or entry["id"],
+                "image": (meta or {}).get("image"),
+                "order": entry.get("order"),
                 "favorite": bool(entry.get("favorite")),
                 "last_used": float(entry.get("last_used") or 0.0),
                 "position": position,
             })
         out.sort(key=lambda t: (not t["favorite"], -t["last_used"], t["position"]))
         return out
+
+    # -- duplicate detection ----------------------------------------------
+
+    def members(self, playlist_id: str) -> Optional[set]:
+        """Track URIs in a playlist, cached. None when it couldn't be read."""
+        cached = self._members.get(playlist_id)
+        if cached and time.time() - cached[0] < MEMBERSHIP_TTL:
+            return cached[1]
+        try:
+            uris = self.client().playlist_uris(playlist_id)
+        except (NotAuthenticated, SpotifyException, OSError) as exc:
+            log.warning("could not read %s for duplicate check: %s", playlist_id, exc)
+            # Keep a stale set rather than claiming nothing is a duplicate.
+            return cached[1] if cached else None
+        self._members[playlist_id] = (time.time(), uris)
+        return uris
+
+    def remember_member(self, playlist_id: str, uri: str, present: bool) -> None:
+        """Keep the cached set in step with a write we just made."""
+        cached = self._members.get(playlist_id)
+        if not cached:
+            return
+        at, uris = cached
+        if present:
+            uris.add(uri)
+        else:
+            uris.discard(uri)
+        self._members[playlist_id] = (at, uris)
+
+    def refresh_members_from_run(self, playlist_id: str, uris: set) -> None:
+        self._members[playlist_id] = (time.time(), uris)
 
     def _add_key(self, playlist_id: str, uri: str) -> str:
         return "%s|%s" % (playlist_id, uri)
@@ -164,7 +204,11 @@ class App:
         except NotAuthenticated as exc:
             return {"started_at": time.time(), "finished_at": time.time(), "duration": 0,
                     "moves": 0, "ok": False, "playlists": [], "error": str(exc)}
-        return client.sort_all(entries).as_dict()
+        run = client.sort_all(entries)
+        for result in run.playlists:
+            if result.uris is not None:
+                self.refresh_members_from_run(result.playlist_id, result.uris)
+        return run.as_dict()
 
     def _store_run(self, result: Dict[str, Any]) -> None:
         self.config.save_state({"last_run": result})
@@ -513,16 +557,30 @@ def create_app(config: Optional[Config] = None) -> Flask:
         if new and len(new) < 8:
             return jsonify({"error": "use at least 8 characters"}), 400
         config.set_ui_password(new)
+        # A Tesla link must never outlive the password: it authenticates by URL
+        # alone, so leaving it live on an unprotected instance would hand out
+        # exactly the access the password was there to gate.
+        revoked = False
+        if not config.auth_enabled and config.tesla_token:
+            config.clear_tesla_token()
+            revoked = True
         session["ui_ok"] = True
         session["csrf"] = new_csrf_token()
         return jsonify({"ok": True, "enabled": config.auth_enabled,
-                        "csrf_token": session["csrf"]})
+                        "tesla_revoked": revoked, "csrf_token": session["csrf"]})
 
     @app.post("/api/tesla-link")
     @login_required
     def api_tesla_link():
         action = (request.get_json(silent=True) or {}).get("action")
         if action in ("enable", "regenerate"):
+            # The Tesla link bypasses the login by design, so without a password on
+            # the UI it would be the only thing standing between a leaked URL and
+            # an otherwise wide-open instance. Refuse to mint one.
+            if not config.auth_enabled:
+                return jsonify({"error": "Set a password under Access first — the Tesla "
+                                         "link works without signing in, so it must not be "
+                                         "the only lock on the door."}), 400
             config.new_tesla_token()
         elif action == "disable":
             config.clear_tesla_token()
@@ -556,7 +614,17 @@ def create_app(config: Optional[Config] = None) -> Flask:
     @app.get("/tesla/<token>")
     @tesla_auth
     def tesla_page():
-        return render_template("tesla.html")
+        # Whether to show the "save this to favourites" instruction is decided here,
+        # not in the browser: the Tesla wipes cookies and local storage often enough
+        # that a client-side flag would nag on every drive, and losing the URL is
+        # the one failure the user cannot recover from inside the car.
+        return render_template("tesla.html", onboard=not config.tesla_onboarded)
+
+    @app.post("/api/tesla/<token>/onboarded")
+    @tesla_auth
+    def tesla_onboarded():
+        config.mark_tesla_onboarded()
+        return jsonify({"ok": True})
 
     @app.get("/api/tesla/<token>/state")
     @tesla_auth
@@ -574,6 +642,12 @@ def create_app(config: Optional[Config] = None) -> Flask:
         uri = now.get("uri") or ""
         for target in targets:
             target["added"] = bool(state.recent_add(target["id"], uri)) if uri else False
+            # Already in the playlist from before — from a previous drive, the
+            # desktop app, anywhere. Distinct from "added": that means *this*
+            # session put it there and can take it back out.
+            members = state.members(target["id"]) if uri else None
+            target["contains"] = bool(uri and members is not None and uri in members)
+            target["known"] = members is not None
         return jsonify({"now": now, "targets": targets})
 
     def _tesla_request():
@@ -598,15 +672,25 @@ def create_app(config: Optional[Config] = None) -> Flask:
         playlist_id, uri = parsed
         if state.recent_add(playlist_id, uri):
             return jsonify({"ok": True, "duplicate": True, "message": "Already added"})
+        members = state.members(playlist_id)
+        if members is not None and uri in members:
+            # Already there from some earlier time, so there is no undo record and
+            # nothing to do. Say so rather than silently stacking a duplicate.
+            return jsonify({"ok": True, "duplicate": True, "contains": True,
+                            "message": "Already in this playlist"})
+        entry = next((e for e in config.add_entries if e["id"] == playlist_id), {})
         try:
-            info = state.client().add_to_playlist(playlist_id, uri)
+            info = state.client().add_to_playlist(
+                playlist_id, uri, entry.get("order") or config.order)
         except NotAuthenticated:
             return jsonify({"error": "spoti-sort is not connected to Spotify"}), 503
         except SpotifyException as exc:
             return jsonify({"error": exc.msg or "Spotify rejected the add"}), 502
         state.remember_add(playlist_id, uri, info)
+        state.remember_member(playlist_id, uri, True)
         config.touch_entry(playlist_id)      # feeds the recently-used ordering
-        log.info("tesla: added %s to %s", uri, playlist_id)
+        log.info("tesla: added %s to %s at position %s", uri, playlist_id,
+                 info.get("position"))
         return jsonify({"ok": True, "message": "Added"})
 
     @app.post("/api/tesla/<token>/remove")
@@ -637,6 +721,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                 return jsonify({"error": "Playlist changed since — remove it in Spotify"}), 409
             return jsonify({"error": exc.msg or "Spotify rejected the removal"}), 502
         state.forget_add(playlist_id, uri)
+        state.remember_member(playlist_id, uri, False)
         log.info("tesla: removed %s from %s", uri, playlist_id)
         return jsonify({"ok": True, "message": "Removed"})
 

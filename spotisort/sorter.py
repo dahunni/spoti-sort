@@ -22,7 +22,12 @@ log = logging.getLogger(__name__)
 # Only what we actually need. Spotify's 2026 migration renamed the per-entry key
 # from `track` to `item`; episodes carry `name` too, and anything unavailable comes
 # back as null and is handled by `_sort_key`.
-ITEM_FIELDS = "next,items(added_at,item(id,name))"
+ITEM_FIELDS = "next,items(added_at,item(id,name,uri))"
+
+
+def item_uri(entry: Dict[str, Any]) -> Optional[str]:
+    """The playable URI of a playlist entry, or None for local files."""
+    return ((entry or {}).get("item") or {}).get("uri")
 
 NEWEST_FIRST = "newest_first"
 OLDEST_FIRST = "oldest_first"
@@ -127,6 +132,8 @@ class PlaylistResult:
     status: str = "ok"          # ok | skipped | error
     detail: str = ""
     order: str = NEWEST_FIRST
+    # Track URIs seen during the run, for the duplicate-check cache. Not serialised.
+    uris: Optional[set] = None
 
     def as_dict(self) -> Dict[str, Any]:
         return {

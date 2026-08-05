@@ -11,6 +11,22 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎵</text></svg>">
 </head>
 <body>
+{% if onboard %}
+<div id="onboard" class="onboard">
+  <div class="onboard-card">
+    <div class="onboard-icon">★</div>
+    <h1>Save this page first</h1>
+    <p>This link is the only way back in — the car's browser forgets everything else,
+       and the address contains your access key.</p>
+    <ol>
+      <li>Tap the <b>★ star</b> or <b>bookmark</b> icon at the <b>top right</b> of the browser.</li>
+      <li>Confirm to add it to your favourites.</li>
+    </ol>
+    <p class="onboard-hint">You'll then be able to reopen it from the favourites bar on any drive.</p>
+    <button class="onboard-done" id="onboard-done" type="button">Done — I've saved it</button>
+  </div>
+</div>
+{% endif %}
 <main id="app">
   <section id="idle" class="idle">
     <div class="idle-icon">♪</div>

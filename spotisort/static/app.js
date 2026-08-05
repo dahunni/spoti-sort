@@ -243,6 +243,9 @@
     const on = !!st.tesla_url;
     $("#tesla-on").hidden = !on;
     $("#tesla-off").hidden = on;
+    // A link that authenticates by URL alone must not be the only lock on the door.
+    $("#tesla-needs-password").hidden = !!st.auth_enabled;
+    $("#tesla-enable").disabled = !st.auth_enabled;
     if (on) {
       $("#tesla-url").textContent = st.tesla_url;
       $("#tesla-open").href = st.tesla_url;
@@ -513,7 +516,10 @@
       ev.preventDefault();
       const fd = new FormData(passwordForm);
       const next = String(fd.get("password") || "");
-      if (!next && !confirm("Remove the password and leave this page open to anyone who can reach it?")) return;
+      const warning = state.status.tesla_url
+        ? "Remove the password? This also turns off the Tesla link, so the bookmark in the car will stop working."
+        : "Remove the password and leave this page open to anyone who can reach it?";
+      if (!next && !confirm(warning)) return;
       try {
         const data = await api("/api/password", {
           method: "POST",
@@ -521,7 +527,8 @@
         });
         if (data.csrf_token) csrfToken = data.csrf_token;
         passwordForm.reset();
-        toast(data.enabled ? "Password set" : "Password removed");
+        toast(data.tesla_revoked ? "Password removed — Tesla link turned off"
+              : data.enabled ? "Password set" : "Password removed");
         await poll();
       } catch (err) { toast(err.message, true); }
     });

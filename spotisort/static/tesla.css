@@ -68,8 +68,19 @@ body { overflow-x: hidden; }
 }
 .target:active { transform: scale(.985); background: var(--panel-2); }
 .target .tick { font-size: 22px; color: var(--accent); opacity: 0; flex: none; }
-.target .star { display: none; font-size: 17px; color: #f2c14e; flex: none; margin-right: -4px; }
+.target .star { display: none; font-size: 17px; color: #f2c14e; flex: none; }
 .target.fav .star { display: inline; }
+.target .cover {
+  width: 48px; height: 48px; border-radius: 8px; object-fit: cover; flex: none;
+  background: var(--panel-2);
+}
+.target .text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.target .sub { font-size: 13px; font-weight: 500; color: var(--muted); }
+.target .sub:empty { display: none; }
+/* Already in the playlist from before this session: nothing to add, nothing to undo. */
+.target.already { opacity: .62; border-color: var(--line); }
+.target.already .tick { opacity: 1; color: var(--muted); }
+.target.already:active { transform: none; }
 .target.done { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); }
 .target.done .tick { opacity: 1; }
 .target.busy { opacity: .55; }
@@ -77,6 +88,30 @@ body { overflow-x: hidden; }
 .target .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .note { text-align: center; color: var(--muted); font-size: 15px; margin: 0; min-height: 20px; }
+
+/* first-open instruction */
+.onboard {
+  position: fixed; inset: 0; z-index: 30; background: rgba(6,8,10,.93);
+  display: grid; place-items: center; padding: 24px; overflow-y: auto;
+}
+.onboard-card { max-width: 560px; text-align: center; }
+.onboard-icon {
+  width: 74px; height: 74px; margin: 0 auto 18px; border-radius: 50%;
+  background: var(--accent); color: var(--accent-ink);
+  display: grid; place-items: center; font-size: 36px;
+}
+.onboard h1 { font-size: 27px; margin: 0 0 10px; }
+.onboard p { color: var(--muted); font-size: 17px; margin: 0 0 14px; }
+.onboard ol { text-align: left; margin: 0 auto 16px; padding-left: 24px; max-width: 420px; font-size: 17px; }
+.onboard li { margin-bottom: 9px; }
+.onboard-hint { font-size: 15px; }
+.onboard-done {
+  width: 100%; max-width: 420px; min-height: 62px; padding: 16px 24px;
+  font: inherit; font-size: 18px; font-weight: 700;
+  background: var(--accent); color: var(--accent-ink);
+  border: 0; border-radius: 14px; cursor: pointer;
+}
+.onboard-done:disabled { opacity: .6; }
 
 /* flash */
 .flash {

@@ -148,10 +148,25 @@ A single bookmarkable page for the car. It shows what's playing and adds it to o
 enabled playlists with one tap — useful because the Tesla player can't add to a playlist
 at all.
 
+**A password is required before a link can be created.** The link authenticates by URL
+alone, so on an instance with no password it would be the only lock on the door; removing
+the password later turns the link off too.
+
 Open **Tesla page → Create link** in the UI and bookmark the resulting URL in the car's
-browser. Buttons are ordered ★ favourites first, then whichever you added to most
-recently. Tap a playlist to add the current track; tap it again while it's green to undo,
-which removes exactly the copy that tap created.
+browser. The first time the page is opened it shows an instruction to save it to the
+favourites via the star at the top right — the car's browser routinely loses cookies and
+local storage, and the URL is the only way back in, so that flag is stored on the server
+rather than in the browser. Regenerating the link brings the instruction back.
+
+Each playlist button shows its cover art, and one that **already contains the current
+track** is dimmed and marked rather than offered — the check covers copies added at any
+time from anywhere, not just this session. Buttons are ordered ★ favourites first, then
+whichever you added to most recently. Tap a playlist to add the current track; tap it
+again while it's green to undo, which removes exactly the copy that tap created.
+
+An added track lands where the playlist's own order says it should: at the top of a
+newest-first playlist, at the end of an oldest-first one. It is in the right place
+immediately, without waiting for the next scheduled run.
 
 The link contains its own access key, so the car never sees your Spotify login and never
 has to sign in — but that also means **anyone with the link can use it**. It is

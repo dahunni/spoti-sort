@@ -56,7 +56,8 @@
     // Order matters here: the server sorts favourites and recently-used first, so a
     // change in ranking has to rebuild the row.
     var key = targets.map(function (t) {
-      return t.id + ":" + t.name + ":" + (t.favorite ? 1 : 0);
+      return t.id + ":" + t.name + ":" + (t.favorite ? 1 : 0) +
+             ":" + (t.contains ? 1 : 0) + ":" + (t.image || "");
     }).join("|") + "@" + now.uri;
     if (key === current.targetsKey) return;   // avoid rebuilding under the user's finger
     current.targetsKey = key;
@@ -73,13 +74,23 @@
 
     targets.forEach(function (target) {
       var button = document.createElement("button");
+      // `contains` means it was already there before this session, so there is no
+      // undo record for it — the button is marked and inert rather than pretending
+      // a tap could take it back out.
+      var already = target.contains && !target.added;
       button.className = "target" + (target.added ? " done" : "") +
+                         (already ? " already" : "") +
                          (target.favorite ? " fav" : "");
       button.type = "button";
-      button.disabled = !now.addable;
-      button.innerHTML = '<span class="star">★</span><span class="label"></span>' +
-                         '<span class="tick">✓</span>';
+      button.disabled = !now.addable || already;
+      var art = target.image
+        ? '<img class="cover" src="' + target.image + '" alt="">'
+        : '<span class="cover"></span>';
+      button.innerHTML = art +
+        '<span class="text"><span class="label"></span><span class="sub"></span></span>' +
+        '<span class="star">★</span><span class="tick">✓</span>';
       button.querySelector(".label").textContent = target.name;
+      button.querySelector(".sub").textContent = already ? "already in this playlist" : "";
       button.onclick = function () { toggle(button, target, now); };
       host.appendChild(button);
     });
@@ -106,7 +117,15 @@
       }
       if (undo) {
         button.className = "target" + wasFav;
+        button.querySelector(".sub").textContent = "";
         flash("Removed from " + target.name);
+      } else if (data.contains) {
+        // Was already in the playlist from before; nothing was added and there is
+        // nothing to undo.
+        button.className = "target already" + wasFav;
+        button.disabled = true;
+        button.querySelector(".sub").textContent = "already in this playlist";
+        flash("Already in " + target.name);
       } else {
         button.className = "target done" + wasFav;
         flash(data.duplicate ? "Already in " + target.name : "Added to " + target.name);
@@ -175,6 +194,20 @@
       renderTargets(data.targets || [], now);
       schedule(now.is_playing ? FAST : SLOW);
     });
+  }
+
+  // Dismissal is recorded on the server. The car loses local storage between
+  // drives, so a client-side flag would show this banner again every time.
+  var onboardDone = el("onboard-done");
+  if (onboardDone) {
+    onboardDone.onclick = function () {
+      onboardDone.disabled = true;
+      request(API + "/onboarded", { method: "POST" }, function (err) {
+        var panel = el("onboard");
+        if (panel) panel.parentNode.removeChild(panel);
+        if (err) flash("Saved, but couldn't record it — you may see this again", true);
+      });
+    };
   }
 
   document.addEventListener("visibilitychange", function () {

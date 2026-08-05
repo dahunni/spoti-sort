@@ -211,6 +211,11 @@
     <p class="muted">A single bookmarkable page for the car: it shows what's playing and adds it to one of your enabled playlists with one tap. The link carries its own access key, so the car never has to log in.</p>
 
     <div id="tesla-off" hidden>
+      <p class="alert error" id="tesla-needs-password" hidden style="margin-bottom:12px">
+        <b>Set a password first.</b> The Tesla link deliberately works without signing in,
+        so on an instance with no password it would be the only thing between a leaked URL
+        and everything else. Set one under <b>Access</b> above, then come back.
+      </p>
       <button class="btn primary" id="tesla-enable">Create link</button>
     </div>
 
