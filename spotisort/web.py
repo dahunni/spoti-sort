@@ -15,6 +15,7 @@ from flask import (Flask, abort, jsonify, redirect, render_template, request,
 from spotipy.exceptions import SpotifyException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from . import __version__
 from .config import Config, clamp_interval, clean_public_url
 from .scheduler import Scheduler
 from .security import (LoginLimiter, client_key, csrf_ok, new_csrf_token,
@@ -228,6 +229,7 @@ class App:
 
         entries = self.config.entries
         return {
+            "version": __version__,
             "configured": self.config.has_credentials,
             "credentials_from_env": self.config.credentials_from_env,
             "connected": connected,
@@ -280,6 +282,11 @@ def create_app(config: Optional[Config] = None) -> Flask:
         # Without this, a reverse proxy's https is invisible and both the secure
         # cookie flag and any generated URL come out as http.
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=hops, x_proto=hops, x_host=hops)
+
+    @app.context_processor
+    def inject_version():
+        # Single source of truth in spotisort/__init__.py; also the Docker tag.
+        return {"version": __version__}
 
     @app.after_request
     def security_headers(response):

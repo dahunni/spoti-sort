@@ -675,3 +675,24 @@ class ConfigMigrationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VersionTest(unittest.TestCase):
+    def test_is_semver_on_the_two_line(self):
+        from spotisort import __version__
+        parts = __version__.split(".")
+        self.assertEqual(len(parts), 3, __version__)
+        self.assertTrue(all(p.isdigit() for p in parts), __version__)
+        self.assertEqual(parts[0], "2", "the rewritten generation is 2.x")
+
+    def test_is_surfaced_to_the_ui(self):
+        import tempfile
+        from spotisort import __version__
+        from spotisort.config import Config
+        from spotisort.web import create_app
+        for var in ("UI_PASSWORD", "PUBLIC_URL"):
+            os.environ.pop(var, None)
+        app = create_app(Config(tempfile.mkdtemp()))
+        client = app.test_client()
+        self.assertIn("v" + __version__, client.get("/").get_data(as_text=True))
+        self.assertEqual(client.get("/api/status").get_json()["version"], __version__)

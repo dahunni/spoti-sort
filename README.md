@@ -47,8 +47,11 @@ schedule and has a web UI for setup, playlist selection and monitoring.
 ### 1. Run the container
 
 ```bash
-docker run -d --name spoti-sort -p 8080:8080 -v /path/on/host:/config ghcr.io/dahunni/spoti-sort:latest
+docker run -d --name spoti-sort -p 8080:8080 -v /path/on/host:/config dahunni/spoti-sort:latest
 ```
+
+Images are published for `linux/amd64` and `linux/arm64`, so the same tag works on a PC,
+a NAS and a Raspberry Pi.
 
 Or with the included compose file:
 
@@ -262,6 +265,18 @@ Two knock-on changes that show up in the UI:
 If you see `403 Forbidden` on playlist endpoints while `/me` works, check that your Spotify
 app has **Web API** enabled and that your account is listed under **User Management** — a
 development-mode app only works for accounts you add, including your own.
+
+## 🔖 Versioning <a name="versioning"></a>
+
+[SemVer](https://semver.org) on a 2.x line: **2** marks the rewritten generation — 1.x was
+the original cron-driven script with no web UI. Minor releases add features, patch releases
+fix them.
+
+`spotisort/__init__.py` holds the version and is the single source of truth. The web UI
+shows it next to the title, `GET /api/status` returns it, and the Docker image is tagged
+from it — so `docker images` and the badge in the UI can never disagree.
+
+Each release is published as `dahunni/spoti-sort:<version>` plus `:latest`.
 
 ## 🛠 Development <a name="development"></a>
 
