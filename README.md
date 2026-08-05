@@ -284,9 +284,20 @@ Each release is published as `dahunni/spoti-sort:<version>` plus `:latest`.
 
 ## 🛠 Development <a name="development"></a>
 
+**Working on the code?** [ARCHITECTURE.md](ARCHITECTURE.md) is the handoff: layout, data
+model, request flows, the release process, and the non-obvious constraints worth knowing
+before changing the sorter or the Spotify calls.
+
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
 CONFIG_DIR=./config .venv/bin/python app.py
+```
+
+Or run the whole UI against an in-memory fake Spotify — no credentials, no network, no risk
+to a real account:
+
+```bash
+.venv/bin/python tools/devserver.py
 ```
 
 ```bash
