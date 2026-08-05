@@ -703,22 +703,29 @@ def create_app(config: Optional[Config] = None) -> Flask:
     @app.post("/api/tesla/<token>/remove")
     @tesla_auth
     def tesla_remove():
-        """Undo an add made from this page.
+        """Take a track back off a playlist.
 
-        Only undoes adds we still hold a record for, and only the exact copy that
-        add created — never an earlier copy of the same track that was already in
-        the playlist.
+        When this page added it, only the exact copy that add created is
+        removed — pinned by position and snapshot, never an earlier copy of the
+        same track that was already in the playlist. When there is no such
+        record (the track was already there before this session), every copy
+        of the URI is removed instead, since there is no single position to
+        pin.
         """
         parsed, error = _tesla_request()
         if error:
             return error
         playlist_id, uri = parsed
         info = state.recent_add(playlist_id, uri)
-        if not info:
-            return jsonify({"error": "nothing to undo for this track"}), 409
         try:
-            state.client().remove_from_playlist(
-                playlist_id, uri, int(info.get("position") or 0), info.get("snapshot"))
+            if info:
+                state.client().remove_from_playlist(
+                    playlist_id, uri, int(info.get("position") or 0), info.get("snapshot"))
+            else:
+                members = state.members(playlist_id)
+                if members is None or uri not in members:
+                    return jsonify({"error": "nothing to undo for this track"}), 409
+                state.client().remove_all_from_playlist(playlist_id, uri)
         except NotAuthenticated:
             return jsonify({"error": "spoti-sort is not connected to Spotify"}), 503
         except SpotifyException as exc:

@@ -75,14 +75,14 @@
     targets.forEach(function (target) {
       var button = document.createElement("button");
       // `contains` means it was already there before this session, so there is no
-      // undo record for it — the button is marked and inert rather than pretending
-      // a tap could take it back out.
+      // per-add undo record for it — tapping still removes it, just via a
+      // remove-every-copy call instead of an undo of a specific position.
       var already = target.contains && !target.added;
       button.className = "target" + (target.added ? " done" : "") +
                          (already ? " already" : "") +
                          (target.favorite ? " fav" : "");
       button.type = "button";
-      button.disabled = !now.addable || already;
+      button.disabled = !now.addable;
       var art = target.image
         ? '<img class="cover" src="' + target.image + '" alt="">'
         : '<span class="cover"></span>';
@@ -100,7 +100,9 @@
   // Without this an accidental tap was permanent from inside the car.
   function toggle(button, target, now) {
     if (button.disabled) return;
-    var undo = button.className.indexOf("done") >= 0;
+    var wasDone = button.className.indexOf("done") >= 0;
+    var wasAlready = button.className.indexOf("already") >= 0;
+    var undo = wasDone || wasAlready;
     var wasFav = button.className.indexOf("fav") >= 0 ? " fav" : "";
     button.disabled = true;
     button.className = "target busy" + wasFav;
@@ -111,7 +113,8 @@
       button.disabled = false;
       if (err) {
         // Leave the button showing the state the playlist is actually in.
-        button.className = "target" + (undo ? " done" : "") + wasFav;
+        button.className = "target" + (wasDone ? " done" : "") +
+                           (wasAlready ? " already" : "") + wasFav;
         flash(err, true);
         return;
       }
@@ -120,10 +123,9 @@
         button.querySelector(".sub").textContent = "";
         flash("Removed from " + target.name);
       } else if (data.contains) {
-        // Was already in the playlist from before; nothing was added and there is
-        // nothing to undo.
+        // Was already in the playlist from before; nothing was added, but it can
+        // still be tapped again to remove it.
         button.className = "target already" + wasFav;
-        button.disabled = true;
         button.querySelector(".sub").textContent = "already in this playlist";
         flash("Already in " + target.name);
       } else {

@@ -77,10 +77,10 @@ body { overflow-x: hidden; }
 .target .text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .target .sub { font-size: 13px; font-weight: 500; color: var(--muted); }
 .target .sub:empty { display: none; }
-/* Already in the playlist from before this session: nothing to add, nothing to undo. */
+/* Already in the playlist from before this session: no per-add undo record, but
+   still tappable to remove every copy of the track. */
 .target.already { opacity: .62; border-color: var(--line); }
 .target.already .tick { opacity: 1; color: var(--muted); }
-.target.already:active { transform: none; }
 .target.done { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); }
 .target.done .tick { opacity: 1; }
 .target.busy { opacity: .55; }
