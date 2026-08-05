@@ -221,10 +221,25 @@ class Config:
 
     @property
     def redirect_uri(self) -> str:
-        # Must match the Spotify dashboard entry byte for byte. REDIRECT_URI stays
-        # available for the case where the callback address differs from the base
-        # address (an odd reverse-proxy setup, say).
-        return _env("REDIRECT_URI") or self.base_url + "/callback"
+        """The callback URI, which Spotify constrains far more than the UI address.
+
+        Spotify only accepts HTTPS, or HTTP on a loopback *literal* (127.0.0.1 or
+        [::1]) — plain HTTP to a LAN address or to `localhost` is rejected with
+        "Insecure redirect URI". So this deliberately does not follow the public
+        address unless that address is already HTTPS; a LAN http:// setup
+        authorises over loopback instead, which is what Spotify permits.
+        """
+        env = _env("REDIRECT_URI")
+        if env:
+            return env
+        base = self.public_url
+        if base.startswith("https://"):
+            return base + "/callback"
+        return "http://127.0.0.1:%d/callback" % self.port
+
+    @property
+    def redirect_uri_is_loopback(self) -> bool:
+        return (urlparse(self.redirect_uri).hostname or "") in ("127.0.0.1", "::1")
 
     @property
     def public_url_parts(self) -> Dict[str, str]:

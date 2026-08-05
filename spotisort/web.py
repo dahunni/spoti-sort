@@ -8,6 +8,7 @@ import logging
 import time
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qs, urlparse
 
 from flask import (Flask, abort, jsonify, redirect, render_template, request,
                    session, url_for)
@@ -190,6 +191,8 @@ class App:
             "auth_error": self._auth_error,
             "redirect_uri": self.config.redirect_uri,
             "redirect_uri_from_env": self.config.redirect_uri_from_env,
+            "redirect_uri_is_loopback": self.config.redirect_uri_is_loopback,
+            "port": self.config.port,
             "public_url": self.config.public_url,
             "public_url_parts": self.config.public_url_parts,
             "public_url_from_env": self.config.public_url_from_env,
@@ -366,6 +369,40 @@ def create_app(config: Optional[Config] = None) -> Flask:
             log.warning("token exchange failed: %s", exc)
             state._auth_error = "Token exchange failed: %s" % exc
         return redirect(url_for("index"))
+
+    @app.post("/api/exchange")
+    @login_required
+    def api_exchange():
+        """Finish authorisation from a code pasted by hand.
+
+        Spotify's loopback redirect URI only resolves on the machine running
+        spoti-sort, so when the UI is open on a laptop or phone the callback lands
+        on a page that cannot load. The address bar still holds the code, and this
+        accepts either that whole URL or the bare code.
+        """
+        raw = str((request.get_json(silent=True) or {}).get("code") or "").strip()
+        if not raw:
+            return jsonify({"error": "paste the address you were redirected to"}), 400
+        code = raw
+        if "://" in raw or "code=" in raw:
+            query = parse_qs(urlparse(raw).query)
+            if query.get("error"):
+                return jsonify({"error": "Spotify returned: %s" % query["error"][0]}), 400
+            found = query.get("code")
+            if not found:
+                return jsonify({"error": "that address has no ?code= in it"}), 400
+            code = found[0]
+        try:
+            state.oauth().get_access_token(code, as_dict=False, check_cache=False)
+        except NotAuthenticated as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception as exc:  # noqa: BLE001 - spotipy raises assorted types here
+            log.warning("manual token exchange failed: %s", exc)
+            return jsonify({"error": "Spotify rejected that code. Codes are single-use "
+                                     "and expire quickly — authorise again for a fresh one."}), 400
+        state.reset_client()
+        state._auth_error = ""
+        return jsonify({"ok": True})
 
     @app.post("/api/disconnect")
     @login_required

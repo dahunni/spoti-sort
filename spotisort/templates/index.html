@@ -45,6 +45,13 @@
     </li>
     <li>Add this exact <b>Redirect URI</b> to the Spotify app — it must match character for character:
       <div class="copyrow"><code id="redirect-uri">{{ status.redirect_uri }}</code><button class="btn ghost small" data-copy="#redirect-uri">Copy</button></div>
+      <span class="hint" id="loopback-note" {% if not status.redirect_uri_is_loopback %}hidden{% endif %}>
+        Spotify only accepts <code>https</code> addresses or <code>http</code> on
+        <code>127.0.0.1</code> — a plain <code>http</code> LAN address or <code>localhost</code>
+        is refused as <i>insecure</i>. So authorisation runs over loopback regardless of the
+        address above; that address is still used for the Tesla link. Put this instance behind
+        HTTPS and the redirect URI follows it.
+      </span>
       <span class="hint" id="redirect-hint">
         {%- if status.redirect_uri_from_env %}Fixed by the <code>REDIRECT_URI</code> variable.{% endif -%}
       </span>
@@ -80,6 +87,22 @@
     <code id="mismatch-form"></code>. Saving happens automatically when you click below.
   </p>
   <a class="btn primary" id="connect-link" href="{{ url_for('connect') }}">Authorise with Spotify</a>
+
+  <div id="manual-exchange" {% if not status.redirect_uri_is_loopback %}hidden{% endif %}>
+    <p class="hint" style="margin-top:14px">
+      <b>Not on the machine running spoti-sort?</b> Spotify will send you to
+      <code id="loopback-target">127.0.0.1</code> afterwards, which only resolves there — so
+      the page won't load. That's expected. Copy the address it failed on out of the
+      browser bar and paste it here; the code is in it.
+    </p>
+    <div class="urlrow">
+      <input type="text" id="manual-code" placeholder="http://127.0.0.1:8080/callback?code=AQD…"
+             autocomplete="off" spellcheck="false">
+      <button class="btn ghost small" id="manual-submit">Finish</button>
+    </div>
+    <span class="hint">Codes are single-use and expire within a minute or two — if it fails, just authorise again for a fresh one.</span>
+  </div>
+
   <p class="hint">The refresh token is kept in <code>/config/tokens.json</code>, so this survives restarts. Mount that directory or you'll be doing this again after every update.</p>
 </section>
 

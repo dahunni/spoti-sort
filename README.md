@@ -72,8 +72,18 @@ app, tick **Web API**, and add the redirect URI shown in the UI — by default:
 http://127.0.0.1:8080/callback
 ```
 
-It must match character for character. Use `127.0.0.1`, not `localhost`: Spotify no
-longer accepts `localhost` for new apps.
+It must match character for character.
+
+**Spotify only accepts an HTTPS redirect URI, or HTTP on a loopback literal**
+(`127.0.0.1`, `[::1]`). A plain `http://` LAN address — or `localhost` — is refused with
+*"Insecure redirect URI"*. So authorisation runs over `127.0.0.1` no matter what address
+you reach the UI on; only the redirect URI is constrained, and your address is still used
+for the Tesla link. Put the instance behind HTTPS and the redirect URI follows it
+automatically.
+
+If you're setting up from another machine, the callback will land on a `127.0.0.1` page
+that can't load — that's expected. Copy the failed address out of the browser bar and
+paste it into **Finish** on the authorise card; the code is in it.
 
 Copy the Client ID and secret into the UI (or set them as environment variables), click
 **Authorise with Spotify**, and pick your playlists. That's it — no shell, no manual

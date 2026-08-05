@@ -257,10 +257,31 @@ class TeslaTokenTest(unittest.TestCase):
         cfg.clear_tesla_token()
         self.assertEqual(cfg.tesla_url, "")
 
-    def test_public_url_drives_the_redirect_uri(self):
+    def test_https_public_url_drives_the_redirect_uri(self):
         cfg = self.load()
         cfg.update(public_url="https://spoti.example.com")
         self.assertEqual(cfg.redirect_uri, "https://spoti.example.com/callback")
+        self.assertFalse(cfg.redirect_uri_is_loopback)
+
+    def test_http_lan_address_falls_back_to_loopback(self):
+        # Spotify rejects plain http to anything but a loopback literal with
+        # "Insecure redirect URI", so the LAN address must not be used here.
+        cfg = self.load()
+        cfg.update(public_url="http://192.168.1.50:8080")
+        self.assertEqual(cfg.redirect_uri, "http://127.0.0.1:8080/callback")
+        self.assertTrue(cfg.redirect_uri_is_loopback)
+
+    def test_http_hostname_also_falls_back(self):
+        cfg = self.load()
+        cfg.update(public_url="http://spoti.example.com")
+        self.assertEqual(cfg.redirect_uri, "http://127.0.0.1:8080/callback")
+
+    def test_the_public_address_is_still_used_for_the_tesla_link(self):
+        # Only the redirect URI is constrained; the car page is a plain web page.
+        cfg = self.load()
+        cfg.update(public_url="http://192.168.1.50:8080")
+        cfg.new_tesla_token()
+        self.assertTrue(cfg.tesla_url.startswith("http://192.168.1.50:8080/tesla/"))
 
     def test_redirect_uri_env_overrides_public_url(self):
         cfg = self.load()

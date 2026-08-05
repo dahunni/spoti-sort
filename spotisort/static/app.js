@@ -426,12 +426,20 @@
       return value ? `${scheme.value}://${value}` : "";
     }
 
+    // Mirror of the server rule: Spotify refuses plain http to anything but a
+    // loopback literal, so only an https address can serve as the redirect URI.
+    const loopbackUri = () => `http://127.0.0.1:${state.status.port || 8080}/callback`;
+    const redirectFor = (base) =>
+      base.startsWith("https://") ? base + "/callback" : loopbackUri();
+
     function preview() {
       if (state.status.redirect_uri_from_env) return;   // fixed by REDIRECT_URI
       const base = composeUrl();
-      $("#redirect-uri").textContent = base
-        ? base + "/callback"
-        : `http://127.0.0.1:${location.port || 80}/callback`;
+      const uri = redirectFor(base);
+      $("#redirect-uri").textContent = uri;
+      const onLoopback = uri === loopbackUri();
+      if ($("#loopback-note")) $("#loopback-note").hidden = !onLoopback;
+      if ($("#manual-exchange")) $("#manual-exchange").hidden = !onLoopback;
       if (base === savedUrl) {
         $("#redirect-hint").textContent = "";
       } else if (!savedUrl && base === detectedUrl) {
@@ -442,14 +450,15 @@
           "Not saved yet — click Save, then add this URI to your Spotify app.";
       }
       // Spell out the consequence next to the Authorise button, where it bites.
+      // Only matters when the two resolve to *different* redirect URIs — with an
+      // http address both sides land on loopback, so there is nothing to warn about.
       const box = $("#address-mismatch");
       if (box) {
-        const differs = base !== savedUrl;
+        const differs = redirectFor(savedUrl) !== uri;
         box.hidden = !differs;
         if (differs) {
-          $("#mismatch-server").textContent =
-            (savedUrl || `http://127.0.0.1:${location.port || 80}`) + "/callback";
-          $("#mismatch-form").textContent = (base || "—") + "/callback";
+          $("#mismatch-server").textContent = redirectFor(savedUrl);
+          $("#mismatch-form").textContent = uri;
         }
       }
     }
@@ -541,6 +550,29 @@
       $("#creds-block").hidden = false;
       $("#creds-saved").hidden = true;
     });
+  }
+
+  // Finish authorisation from a pasted callback URL, for when the loopback
+  // redirect can't load because the browser isn't on the host.
+  const manualSubmit = $("#manual-submit");
+  if (manualSubmit) {
+    const field = $("#manual-code");
+    const submit = async () => {
+      const value = field.value.trim();
+      if (!value) { toast("Paste the address you were redirected to", true); return; }
+      manualSubmit.disabled = true;
+      try {
+        await api("/api/exchange", { method: "POST", body: { code: value } });
+        field.value = "";
+        toast("Connected");
+        location.reload();
+      } catch (err) {
+        toast(err.message, true);
+        manualSubmit.disabled = false;
+      }
+    };
+    manualSubmit.addEventListener("click", submit);
+    field.addEventListener("keydown", (ev) => { if (ev.key === "Enter") submit(); });
   }
 
   const credForm = $("#credentials-form");
