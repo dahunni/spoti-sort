@@ -6,4 +6,4 @@ releases fix them. This string is the single source of truth — the web UI read
 and the Docker image is tagged from it.
 """
 
-__version__ = "2.1.0"
+__version__ = "2.1.1"
