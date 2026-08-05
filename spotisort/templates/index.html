@@ -23,17 +23,28 @@
   <p>Spotify only lets a program touch your playlists through an app that <em>you</em> own. It takes a minute and stays entirely in your account.</p>
   <ol class="steps">
     <li>Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer">Spotify developer dashboard</a> and click <b>Create app</b>. Name it anything.</li>
-    <li>Check the address you reach this page on. If it isn't the one below, correct it here first — Spotify compares redirect URIs character for character.
+    <li>Set the address you reach this page on. Behind a reverse proxy this is the
+      public name and scheme, not the container's — pick <code>https</code> and drop the port
+      if your proxy terminates TLS.
       <div class="urlrow">
-        <input type="text" id="public-url" placeholder="http://127.0.0.1:8080" value="{{ status.public_url }}"
-               autocomplete="off" spellcheck="false" {% if status.public_url_from_env %}disabled{% endif %}>
+        <select id="public-scheme" class="scheme" {% if status.public_url_from_env %}disabled{% endif %}>
+          <option value="http"{% if status.public_url_parts.scheme != 'https' %} selected{% endif %}>http://</option>
+          <option value="https"{% if status.public_url_parts.scheme == 'https' %} selected{% endif %}>https://</option>
+        </select>
+        <input type="text" id="public-host" placeholder="192.168.1.50:8080"
+               value="{{ status.public_url_parts.host }}"
+               autocomplete="off" spellcheck="false" autocapitalize="off"
+               {% if status.public_url_from_env %}disabled{% endif %}>
         <button class="btn ghost small" id="save-public-url" {% if status.public_url_from_env %}disabled{% endif %}>Save</button>
       </div>
-      <span class="hint">Hostname or IP with the port, no trailing path — for example <code>http://192.168.1.50:8080</code> or <code>https://spoti.example.com</code>. Leave empty for the default.</span>
+      <span class="hint">Hostname or IP, with a port only if you need one — <code>192.168.1.50:8080</code>, <code>spoti.example.com</code>, or <code>example.com/spotisort</code> for a proxy subpath.
+      {% if status.public_url_from_env %}Fixed by the <code>PUBLIC_URL</code> variable.{% endif %}</span>
     </li>
-    <li>Add this exact <b>Redirect URI</b> to the Spotify app:
+    <li>Add this exact <b>Redirect URI</b> to the Spotify app — it must match character for character:
       <div class="copyrow"><code id="redirect-uri">{{ status.redirect_uri }}</code><button class="btn ghost small" data-copy="#redirect-uri">Copy</button></div>
-      {% if status.redirect_uri_from_env %}<span class="hint">Fixed by the <code>REDIRECT_URI</code> variable.</span>{% endif %}
+      <span class="hint" id="redirect-hint">
+        {%- if status.redirect_uri_from_env %}Fixed by the <code>REDIRECT_URI</code> variable.{% endif -%}
+      </span>
     </li>
     <li>Tick <b>Web API</b>, save, then open <b>Settings</b> to reveal the Client ID and Client secret.</li>
   </ol>

@@ -276,6 +276,28 @@ class TeslaTokenTest(unittest.TestCase):
     def test_default_redirect_uri_is_loopback(self):
         self.assertEqual(self.load().redirect_uri, "http://127.0.0.1:8080/callback")
 
+    def test_url_parts_split_for_the_setup_form(self):
+        cfg = self.load()
+        self.assertEqual(cfg.public_url_parts, {"scheme": "http", "host": "127.0.0.1:8080"})
+        cfg.update(public_url="https://spoti.example.com")
+        self.assertEqual(cfg.public_url_parts, {"scheme": "https", "host": "spoti.example.com"})
+
+    def test_url_parts_keep_a_reverse_proxy_subpath(self):
+        cfg = self.load()
+        cfg.update(public_url="https://example.com/spotisort")
+        self.assertEqual(cfg.public_url_parts,
+                         {"scheme": "https", "host": "example.com/spotisort"})
+
+    def test_parts_round_trip_through_clean_public_url(self):
+        from spotisort.config import clean_public_url
+        cfg = self.load()
+        for url in ("https://spoti.example.com", "http://192.168.1.50:8080",
+                    "https://example.com/spotisort"):
+            cfg.update(public_url=url)
+            parts = cfg.public_url_parts
+            # What the form composes must normalise back to what was stored.
+            self.assertEqual(clean_public_url("%s://%s" % (parts["scheme"], parts["host"])), url)
+
 
 class ScopeTest(unittest.TestCase):
     def test_old_token_reports_the_new_playback_scopes(self):

@@ -323,10 +323,49 @@
   // Public address — lives on the setup card, so it must work before connecting.
   const publicUrlBtn = $("#save-public-url");
   if (publicUrlBtn) {
+    const scheme = $("#public-scheme");
+    const host = $("#public-host");
+    const saved = composeUrl();
+
+    // Mirror the server's normalisation so the previewed URI is exactly what gets
+    // stored — Spotify compares redirect URIs byte for byte, so a trailing slash
+    // shown here but stripped on save would send people chasing a mismatch.
+    function composeUrl() {
+      const value = (host.value || "").trim()
+        .replace(/^[a-z]+:\/\//i, "")   // tolerate a pasted full URL
+        .replace(/\/+$/, "");
+      return value ? `${scheme.value}://${value}` : "";
+    }
+
+    function preview() {
+      if (state.status.redirect_uri_from_env) return;   // fixed by REDIRECT_URI
+      const base = composeUrl();
+      $("#redirect-uri").textContent = base
+        ? base + "/callback"
+        : `http://127.0.0.1:${location.port || 80}/callback`;
+      const dirty = base !== saved;
+      $("#redirect-hint").textContent = dirty
+        ? "Not saved yet — click Save, then add this URI to your Spotify app."
+        : "";
+    }
+
+    scheme.addEventListener("change", preview);
+    host.addEventListener("input", preview);
+    // Pasting a whole URL should split itself across the two controls.
+    host.addEventListener("paste", (ev) => {
+      const text = (ev.clipboardData || window.clipboardData).getData("text") || "";
+      const match = text.trim().match(/^(https?):\/\/(.+)$/i);
+      if (!match) return;
+      ev.preventDefault();
+      scheme.value = match[1].toLowerCase();
+      host.value = match[2].replace(/\/+$/, "");
+      preview();
+    });
+
     publicUrlBtn.addEventListener("click", async () => {
       try {
-        await api("/api/settings", { method: "POST", body: { public_url: $("#public-url").value } });
-        location.reload();  // the redirect URI shown above is rendered server-side
+        await api("/api/settings", { method: "POST", body: { public_url: composeUrl() } });
+        location.reload();  // redirect URI and Tesla link are rendered server-side
       } catch (err) { toast(err.message, true); }
     });
   }

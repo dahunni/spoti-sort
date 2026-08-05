@@ -191,6 +191,7 @@ class App:
             "redirect_uri": self.config.redirect_uri,
             "redirect_uri_from_env": self.config.redirect_uri_from_env,
             "public_url": self.config.public_url,
+            "public_url_parts": self.config.public_url_parts,
             "public_url_from_env": self.config.public_url_from_env,
             "missing_scopes": self.missing_scopes() if connected else [],
             "tesla_url": self.config.tesla_url,

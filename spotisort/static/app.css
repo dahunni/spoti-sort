@@ -87,9 +87,14 @@ a { color: inherit; text-decoration-color: var(--accent); text-underline-offset:
 .steps li { margin-bottom: 9px; }
 .copyrow { display: flex; gap: 8px; align-items: center; margin: 7px 0 2px; flex-wrap: wrap; }
 .copyrow code { padding: 5px 9px; overflow-wrap: anywhere; }
-.urlrow { display: flex; gap: 8px; align-items: center; margin: 7px 0 2px; }
-.urlrow input { margin-top: 0; }
+.urlrow { display: flex; gap: 8px; align-items: center; margin: 7px 0 2px; flex-wrap: wrap; }
+.urlrow input { margin-top: 0; flex: 1; min-width: 180px; }
 .urlrow .btn { flex: none; }
+.urlrow .scheme {
+  width: auto; flex: none; margin-top: 0; padding-right: 8px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+}
 a.btn { line-height: normal; }
 
 /* forms */

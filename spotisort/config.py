@@ -227,6 +227,15 @@ class Config:
         return _env("REDIRECT_URI") or self.base_url + "/callback"
 
     @property
+    def public_url_parts(self) -> Dict[str, str]:
+        """``base_url`` split for the setup form's scheme picker and host field."""
+        parsed = urlparse(self.base_url)
+        return {
+            "scheme": parsed.scheme or "http",
+            "host": (parsed.netloc + (parsed.path or "")).rstrip("/"),
+        }
+
+    @property
     def redirect_uri_from_env(self) -> bool:
         return bool(_env("REDIRECT_URI"))
 
