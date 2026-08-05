@@ -274,7 +274,13 @@
     }
     $("#dashboard").hidden = !st.connected;
     $("#step-connect").hidden = !st.configured || st.connected;
-    $("#step-credentials").hidden = !!st.configured;
+    // Keep the address and redirect URI on screen until the account is actually
+    // connected — they have to stay reachable while the Authorise button is up.
+    $("#step-credentials").hidden = !!st.connected;
+    if ($("#creds-block") && !credsEditing) {
+      $("#creds-block").hidden = !!st.configured;
+      $("#creds-saved").hidden = !st.configured;
+    }
     $("#running-pill").hidden = !st.running;
     $("#run-now").disabled = st.running;
     $("#interval").value = String(st.interval_minutes);
@@ -435,6 +441,17 @@
         $("#redirect-hint").textContent =
           "Not saved yet — click Save, then add this URI to your Spotify app.";
       }
+      // Spell out the consequence next to the Authorise button, where it bites.
+      const box = $("#address-mismatch");
+      if (box) {
+        const differs = base !== savedUrl;
+        box.hidden = !differs;
+        if (differs) {
+          $("#mismatch-server").textContent =
+            (savedUrl || `http://127.0.0.1:${location.port || 80}`) + "/callback";
+          $("#mismatch-form").textContent = (base || "—") + "/callback";
+        }
+      }
     }
 
     scheme.addEventListener("change", preview);
@@ -457,6 +474,24 @@
         location.reload();  // redirect URI and Tesla link are rendered server-side
       } catch (err) { toast(err.message, true); }
     });
+
+    // The authorize URL is built server-side from the *saved* address. If the form
+    // still holds an unsaved value, the request would carry a different redirect
+    // URI than the one shown above and Spotify rejects it as a mismatch. Persist
+    // first, then go — clicking Authorise is the consent to save.
+    const connectLink = $("#connect-link");
+    if (connectLink) {
+      connectLink.addEventListener("click", async (ev) => {
+        const base = composeUrl();
+        if (state.status.public_url_from_env || base === savedUrl) return;
+        ev.preventDefault();
+        try {
+          await api("/api/settings", { method: "POST", body: { public_url: base } });
+          location.href = connectLink.href;
+        } catch (err) { toast(err.message, true); }
+      });
+    }
+
   }
 
   const passwordForm = $("#password-form");
@@ -494,6 +529,18 @@
       teslaAction("regenerate", "Generate a new link? The one saved in the car will stop working."));
     $("#tesla-disable").addEventListener("click", () =>
       teslaAction("disable", "Turn off the Tesla page? The saved link will stop working."));
+  }
+
+  // Set while the user has deliberately reopened the credentials form, so the
+  // status poll doesn't collapse it under them.
+  let credsEditing = false;
+  const credsEdit = $("#creds-edit");
+  if (credsEdit) {
+    credsEdit.addEventListener("click", () => {
+      credsEditing = true;
+      $("#creds-block").hidden = false;
+      $("#creds-saved").hidden = true;
+    });
   }
 
   const credForm = $("#credentials-form");

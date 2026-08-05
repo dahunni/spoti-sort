@@ -17,7 +17,10 @@
 <div id="toast" class="toast" hidden></div>
 
 <!-- ── Step 1: credentials ─────────────────────────────────────────── -->
-<section class="card" id="step-credentials" {% if status.configured %}hidden{% endif %}>
+{# Stays visible until actually connected. It used to hide as soon as credentials
+   were saved, which took the address field and redirect URI away with it — exactly
+   when the Authorise button appears and the two have to agree. #}
+<section class="card" id="step-credentials" {% if status.connected %}hidden{% endif %}>
   <div class="step">1</div>
   <h2>Connect a Spotify app</h2>
   <p>Spotify only lets a program touch your playlists through an app that <em>you</em> own. It takes a minute and stays entirely in your account.</p>
@@ -51,12 +54,17 @@
   {% if status.credentials_from_env %}
     <p class="alert ok">Credentials are supplied by the <code>CLIENT_ID</code> / <code>CLIENT_SECRET</code> environment variables.</p>
   {% else %}
-  <form id="credentials-form" class="grid2">
-    <label>Client ID<input type="text" name="client_id" autocomplete="off" spellcheck="false" required></label>
-    <label>Client secret<input name="client_secret" type="password" autocomplete="off" spellcheck="false" required></label>
-    <button class="btn primary" type="submit">Save credentials</button>
-  </form>
-  <p class="hint">Stored in <code>/config/config.json</code> with owner-only permissions. Prefer environment variables? Set <code>CLIENT_ID</code> and <code>CLIENT_SECRET</code> instead and this form disappears.</p>
+  <div id="creds-block" {% if status.configured %}hidden{% endif %}>
+    <form id="credentials-form" class="grid2">
+      <label>Client ID<input type="text" name="client_id" autocomplete="off" spellcheck="false" required></label>
+      <label>Client secret<input name="client_secret" type="password" autocomplete="off" spellcheck="false" required></label>
+      <button class="btn primary" type="submit">Save credentials</button>
+    </form>
+    <p class="hint">Stored in <code>/config/config.json</code> with owner-only permissions. Prefer environment variables? Set <code>CLIENT_ID</code> and <code>CLIENT_SECRET</code> instead and this form disappears.</p>
+  </div>
+  <p class="alert ok" id="creds-saved" {% if not status.configured %}hidden{% endif %}>
+    Client ID and secret saved. <button class="link" id="creds-edit">Change them</button>
+  </p>
   {% endif %}
 </section>
 
@@ -66,7 +74,12 @@
   <h2>Authorise your account</h2>
   <p>You'll be sent to Spotify and straight back here. spoti-sort asks only to read and reorder your playlists — it can't touch your saved songs, follows, or account.</p>
   {% if status.auth_error %}<p class="alert error">{{ status.auth_error }}</p>{% endif %}
-  <a class="btn primary" href="{{ url_for('connect') }}">Authorise with Spotify</a>
+  <p class="alert error" id="address-mismatch" hidden style="margin-bottom:12px">
+    The address above hasn't been saved, so authorising would send
+    <code id="mismatch-server"></code> while your Spotify app expects
+    <code id="mismatch-form"></code>. Saving happens automatically when you click below.
+  </p>
+  <a class="btn primary" id="connect-link" href="{{ url_for('connect') }}">Authorise with Spotify</a>
   <p class="hint">The refresh token is kept in <code>/config/tokens.json</code>, so this survives restarts. Mount that directory or you'll be doing this again after every update.</p>
 </section>
 
