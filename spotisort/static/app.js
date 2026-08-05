@@ -307,17 +307,85 @@
 
   /* ── wiring ─────────────────────────────────────────────────── */
 
-  document.addEventListener("click", async (ev) => {
-    const copyBtn = ev.target.closest("[data-copy]");
-    if (copyBtn) {
-      const text = $(copyBtn.dataset.copy).textContent.trim();
-      try {
-        await navigator.clipboard.writeText(text);
-        toast("Copied");
-      } catch (_) {
-        toast("Copy failed — select it manually", true);
+  /* ── copy ───────────────────────────────────────────────────── */
+
+  // `navigator.clipboard` only exists in a secure context, and this app is
+  // normally reached over plain http at a LAN address — so the modern API is
+  // simply absent for most users, Safari included. Fall back to execCommand,
+  // and to selecting the text if even that is refused.
+
+  const canUseAsyncClipboard = () => !!(navigator.clipboard && window.isSecureContext);
+
+  function legacyCopy(text) {
+    const scratch = document.createElement("textarea");
+    scratch.value = text;
+    scratch.setAttribute("readonly", "");
+    // Off-screen but not display:none, which would make it unselectable.
+    scratch.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;";
+    document.body.appendChild(scratch);
+    const previous = document.activeElement;
+    let ok = false;
+    try {
+      if (/ipad|iphone|ipod/i.test(navigator.userAgent)) {
+        // iOS ignores .select() on a readonly field; it needs an explicit range.
+        const range = document.createRange();
+        range.selectNodeContents(scratch);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        scratch.setSelectionRange(0, text.length);
+      } else {
+        scratch.select();
       }
+      ok = document.execCommand("copy");
+    } catch (_) {
+      ok = false;
     }
+    document.body.removeChild(scratch);
+    if (previous && previous.focus) previous.focus();
+    return ok;
+  }
+
+  function selectElement(el) {
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  const copyHint = /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent)
+    ? "Selected — press ⌘C to copy"
+    : "Selected — press Ctrl+C to copy";
+
+  function copyFailed(source) {
+    selectElement(source);
+    toast(copyHint, true);
+  }
+
+  document.addEventListener("click", (ev) => {
+    const copyBtn = ev.target.closest("[data-copy]");
+    if (!copyBtn) return;
+    const source = $(copyBtn.dataset.copy);
+    if (!source) return;
+    const text = source.textContent.trim();
+
+    if (canUseAsyncClipboard()) {
+      // Called directly in the click handler: Safari rejects a clipboard write
+      // that isn't reached synchronously from the user gesture.
+      navigator.clipboard.writeText(text).then(
+        () => toast("Copied"),
+        () => { if (legacyCopy(text)) toast("Copied"); else copyFailed(source); },
+      );
+      return;
+    }
+    if (legacyCopy(text)) toast("Copied");
+    else copyFailed(source);
   });
 
   // Public address — lives on the setup card, so it must work before connecting.

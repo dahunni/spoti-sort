@@ -86,7 +86,13 @@ a { color: inherit; text-decoration-color: var(--accent); text-underline-offset:
 .steps { margin: 0 0 14px; padding-left: 20px; }
 .steps li { margin-bottom: 9px; }
 .copyrow { display: flex; gap: 8px; align-items: center; margin: 7px 0 2px; flex-wrap: wrap; }
-.copyrow code { padding: 5px 9px; overflow-wrap: anywhere; }
+/* `user-select: all` makes one click or tap grab the whole URL, which is the
+   manual route when the browser refuses clipboard access over plain http. */
+.copyrow code {
+  padding: 5px 9px; overflow-wrap: anywhere;
+  -webkit-user-select: all; user-select: all;
+}
+.copyrow code::selection { background: var(--accent); color: var(--accent-ink); }
 .urlrow { display: flex; gap: 8px; align-items: center; margin: 7px 0 2px; flex-wrap: wrap; }
 .urlrow input { margin-top: 0; flex: 1; min-width: 180px; }
 .urlrow .btn { flex: none; }
