@@ -104,8 +104,9 @@ Turn both off and the playlist is simply deselected.
 
 > **Reaching the UI on another address?** If you browse to `http://192.168.1.50:8080` or
 > through a reverse proxy, type that address into the **address** field in step 2 of the
-> setup card — the redirect URI below it updates to match, and that's the value to paste
-> into Spotify. `PUBLIC_URL` does the same from the environment.
+> setup card; `PUBLIC_URL` does the same from the environment. That address drives the
+> Tesla link. The redirect URI below it only follows the address when it is HTTPS —
+> otherwise it stays on loopback, because that is all Spotify accepts.
 
 ## ⚙️ Configuration <a name="configuration"></a>
 
@@ -116,8 +117,8 @@ precedence where both exist.
 | --- | --- | --- |
 | `CLIENT_ID` | – | Spotify app client ID. Settable in the UI instead. |
 | `CLIENT_SECRET` | – | Spotify app client secret. Settable in the UI instead. |
-| `PUBLIC_URL` | – | Address the UI is actually reached on, e.g. `http://192.168.1.50:8080`. Settable in the UI instead. Drives the redirect URI and the Tesla link. |
-| `REDIRECT_URI` | `$PUBLIC_URL/callback` | Only needed when the callback address differs from `PUBLIC_URL`. Must match the Spotify app exactly. |
+| `PUBLIC_URL` | – | Address the UI is actually reached on, e.g. `http://192.168.1.50:8080`. Settable in the UI instead. Drives the Tesla link, and the redirect URI when it is HTTPS. |
+| `REDIRECT_URI` | `$PUBLIC_URL/callback` if HTTPS, else `http://127.0.0.1:$PORT/callback` | Overrides the choice entirely. Must match the Spotify app exactly, and Spotify requires HTTPS or a loopback literal. |
 | `PORT` | `8080` | Port the UI listens on. |
 | `HOST` | `0.0.0.0` | Bind address. |
 | `CONFIG_DIR` | `/config` | Where settings and the token are stored. |
