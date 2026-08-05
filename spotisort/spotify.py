@@ -247,6 +247,19 @@ class SpotifyClient:
             "remove from %s" % playlist_id,
         )
 
+    def remove_all_from_playlist(self, playlist_id: str, uri: str) -> None:
+        """Remove every copy of ``uri`` from the playlist.
+
+        Used when there is no undo record (the track was already there before
+        this session, not added by it), so there is no single position to pin
+        with a snapshot — omitting ``positions`` removes every matching copy.
+        """
+        payload: Dict[str, Any] = {"items": [{"uri": uri}]}
+        _retry(
+            lambda: self.sp._delete(_items_path(playlist_id), payload=payload),
+            "remove all from %s" % playlist_id,
+        )
+
     def playlist_meta(self, playlist_id: str) -> Dict[str, Any]:
         # `tracks.total` no longer exists on playlist objects; use playlist_total().
         return _retry(
