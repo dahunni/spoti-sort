@@ -29,7 +29,7 @@ def main() -> int:
     app = create_app(config)
     state = app.extensions["spotisort"]
 
-    state.scheduler.start(run_now=config.run_on_start and bool(config.playlists))
+    state.scheduler.start(run_now=config.run_on_start and bool(config.sort_entries))
 
     def shutdown(signum, _frame):
         log.info("signal %s received, stopping", signum)

@@ -90,7 +90,8 @@
 
   <section class="card">
     <h2>Playlists</h2>
-    <p class="muted">Pick the ones to keep sorted, each with its own order. Only playlists you own or that are collaborative can be reordered — the rest are shown greyed out.</p>
+    <p class="muted">Two independent switches per playlist. <b>Sort</b> keeps it in date order on the schedule below. <b>Car</b> offers it as a one-tap target on the Tesla page. Use either, both, or neither — a playlist you only ever add to never has to be reordered.</p>
+    <p class="muted small">Only playlists you own or that are collaborative can be touched; the rest are greyed out.</p>
     <div class="toolbar">
       <input type="search" id="filter" placeholder="Filter playlists…" autocomplete="off">
       <span class="count" id="selcount"></span>
@@ -130,6 +131,34 @@
     <label class="check"><input type="checkbox" id="run-on-start"> Sort once at container start</label>
   </section>
 
+  <section class="card" id="security-card">
+    <h2>Access</h2>
+    <p class="alert error" id="auth-warning" hidden style="margin-bottom:12px">
+      <b>No password set.</b> This instance is reachable at an address other than
+      <code>127.0.0.1</code>, so anyone who can reach it can reorder your playlists. Set a
+      password before exposing it beyond your own network.
+    </p>
+    <p class="alert ok" id="auth-on" hidden style="margin-bottom:12px">A password is required to open this page.</p>
+
+    <div id="auth-env" hidden>
+      <p class="muted">The password comes from the <code>UI_PASSWORD</code> environment variable. Change it there.</p>
+    </div>
+
+    <form id="password-form">
+      <div class="grid2">
+        <label id="current-wrap" hidden>Current password
+          <input type="password" name="current" autocomplete="current-password">
+        </label>
+        <label>New password
+          <input type="password" name="password" autocomplete="new-password" minlength="8">
+          <span class="hint">At least 8 characters. Leave empty and save to remove the password.</span>
+        </label>
+      </div>
+      <button class="btn primary" type="submit">Save password</button>
+    </form>
+    <p class="hint">Stored as a salted PBKDF2 hash, never in plain text. Repeated wrong guesses lock out that address for increasingly long periods. If you put this behind a reverse proxy, set <code>TRUST_PROXY=1</code> so HTTPS and client addresses are read correctly.</p>
+  </section>
+
   <section class="card">
     <h2>Tesla page</h2>
     <p class="muted">A single bookmarkable page for the car: it shows what's playing and adds it to one of your enabled playlists with one tap. The link carries its own access key, so the car never has to log in.</p>
@@ -164,6 +193,9 @@
 {% endblock %}
 
 {% block scripts %}
-<script>window.__STATUS__ = {{ status|tojson }};</script>
+{# A JSON data block, not an inline script: the Content-Security-Policy is
+   `script-src 'self'`, which blocks executable inline scripts. `tojson` is
+   HTML-safe, so a playlist named "</script>" can't break out. #}
+<script type="application/json" id="bootstrap">{{ bootstrap|tojson }}</script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 {% endblock %}

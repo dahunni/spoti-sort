@@ -154,11 +154,27 @@ input:focus-visible, select:focus-visible, button:focus-visible {
   max-height: 380px; overflow-y: auto; border: 1px solid var(--line); border-radius: 11px;
   background: var(--panel-2); padding: 5px;
 }
-.pl { display: flex; align-items: center; gap: 11px; padding: 8px 9px; border-radius: 9px; cursor: pointer; }
+.pl { display: flex; align-items: center; gap: 11px; padding: 8px 9px; border-radius: 9px; }
 .pl:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.pl input { width: 16px; height: 16px; accent-color: var(--accent); flex: none; margin: 0; }
+.pl .roles { display: flex; align-items: center; gap: 6px; flex: none; }
+/* Two independent roles per playlist: keep it sorted, offer it on the car page. */
+.pl .chip {
+  font: inherit; font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  padding: 5px 11px; border-radius: 999px; cursor: pointer;
+  background: transparent; color: var(--muted); border: 1px solid var(--line);
+}
+.pl .chip:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
+.pl .chip.on { background: var(--accent); border-color: transparent; color: var(--accent-ink); }
+.pl .chip:disabled { opacity: .4; cursor: not-allowed; }
+.pl .star {
+  flex: none; background: none; border: 0; padding: 4px 7px; font-size: 18px; line-height: 1;
+  color: var(--muted); opacity: .6; cursor: pointer; border-radius: 6px;
+}
+.pl .star:hover { opacity: 1; color: #d7b04a; }
+.pl .star.on { color: #f2c14e; opacity: 1; }
 .pl .art { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; background: var(--line); flex: none; }
 .pl .meta { min-width: 0; flex: 1; }
+.pl .art { margin-left: 2px; }
 .pl .name { display: block; font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl .sub { display: block; font-size: 12px; color: var(--muted); }
 .pl.on { background: color-mix(in srgb, var(--accent) 10%, transparent); }
@@ -166,7 +182,7 @@ input:focus-visible, select:focus-visible, button:focus-visible {
   width: auto; margin-top: 0; flex: none; padding: 5px 8px; font-size: 12px;
   font-weight: 600; background: var(--panel); border-radius: 7px;
 }
-.pl.locked { opacity: .5; cursor: not-allowed; }
+.pl.locked { opacity: .5; }
 .pl.locked:hover { background: none; }
 .skeleton { height: 52px; margin: 5px; border-radius: 9px; background: linear-gradient(90deg, var(--line), transparent, var(--line)); background-size: 200% 100%; animation: sheen 1.4s ease-in-out infinite; }
 @keyframes sheen { to { background-position: -200% 0; } }

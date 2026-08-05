@@ -4,14 +4,29 @@
   const $ = (sel) => document.querySelector(sel);
   const ORDER_LABELS = { newest_first: "newest first", oldest_first: "oldest first" };
 
+  // Handed over in a JSON data block rather than an inline script, because the CSP
+  // is `script-src 'self'`.
+  let boot = { status: {}, csrf: "" };
+  try {
+    boot = JSON.parse(document.getElementById("bootstrap").textContent);
+  } catch (_) { /* fall through to the empty default; /api/status refills it */ }
+  let csrfToken = boot.csrf || "";
+
   // Selection is a Map of playlist id -> sort order, so each playlist carries its own.
-  const toMap = (entries) => new Map((entries || []).map((e) => [e.id, e.order]));
+  // id -> {sort, add, order}. The two roles are independent: a playlist can be a
+  // Tesla quick-add target without being sorted, and vice versa.
+  const toMap = (entries) => new Map((entries || []).map((e) =>
+    [e.id, { sort: e.sort !== false, add: e.add !== false, order: e.order }]));
+
+  const toFavorites = (entries) =>
+    new Set((entries || []).filter((e) => e.favorite).map((e) => e.id));
 
   const state = {
-    status: window.__STATUS__ || {},
+    status: boot.status || {},
     playlists: [],
-    selected: toMap((window.__STATUS__ || {}).entries),
-    saved: toMap((window.__STATUS__ || {}).entries),
+    selected: toMap((boot.status || {}).entries),
+    saved: toMap((boot.status || {}).entries),
+    favorites: toFavorites((boot.status || {}).entries),
     // Anchor the countdown to a local clock so it ticks smoothly between polls
     // instead of jumping around with request latency.
     skew: 0,
@@ -28,8 +43,13 @@
 
   async function api(path, opts = {}) {
     const res = await fetch(path, {
-      headers: { "Content-Type": "application/json" },
       ...opts,
+      headers: {
+        "Content-Type": "application/json",
+        // Session-cookie auth needs this on every state-changing request.
+        "X-CSRF-Token": csrfToken,
+        ...(opts.headers || {}),
+      },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
     let data = {};
@@ -111,41 +131,81 @@
     }
 
     list.forEach((p) => {
-      const chosen = state.selected.has(p.id);
-      const row = document.createElement("label");
-      row.className = "pl" + (p.editable ? "" : " locked") + (chosen ? " on" : "");
+      const chosen = state.selected.get(p.id) || null;
+      const sortOn = !!(chosen && chosen.sort);
+      const addOn = !!(chosen && chosen.add);
+      // Plain <div> with explicit toggle buttons. An earlier version wrapped the
+      // whole row in a <label>, which made every click on the dropdown or star
+      // toggle selection instead.
+      const row = document.createElement("div");
+      row.className = "pl" + (p.editable ? "" : " locked") +
+                      (sortOn || addOn ? " on" : "");
       const art = p.image
         ? `<img class="art" src="${escape(p.image)}" alt="" loading="lazy">`
         : `<span class="art"></span>`;
       const sub = p.editable
         ? `${p.total} track${p.total === 1 ? "" : "s"} · ${escape(p.owner)}`
         : `${p.total} tracks · owned by ${escape(p.owner)} — can't be reordered`;
-      const order = state.selected.get(p.id) || state.status.default_order || "newest_first";
+      const order = (chosen && chosen.order) || state.status.default_order || "newest_first";
+      const fav = state.favorites.has(p.id);
       row.innerHTML =
-        `<input type="checkbox" ${chosen ? "checked" : ""} ${p.editable ? "" : "disabled"}>` +
         art +
         `<span class="meta"><span class="name">${escape(p.name)}</span><span class="sub">${sub}</span></span>` +
-        `<select class="order" ${chosen ? "" : "hidden"} aria-label="Sort order for ${escape(p.name)}">` +
+        `<span class="roles">` +
+        `<button type="button" class="chip sort${sortOn ? " on" : ""}" role="switch" ` +
+        `aria-checked="${sortOn}" ${p.editable ? "" : "disabled"} ` +
+        `title="Keep this playlist in date order">Sort</button>` +
+        `<select class="order" ${sortOn ? "" : "hidden"} aria-label="Sort order for ${escape(p.name)}">` +
         `<option value="newest_first"${order === "newest_first" ? " selected" : ""}>Newest first</option>` +
         `<option value="oldest_first"${order === "oldest_first" ? " selected" : ""}>Oldest first</option>` +
-        `</select>`;
+        `</select>` +
+        `<button type="button" class="chip add${addOn ? " on" : ""}" role="switch" ` +
+        `aria-checked="${addOn}" ${p.editable ? "" : "disabled"} ` +
+        `title="Offer this playlist on the Tesla page">Car</button>` +
+        `<button type="button" class="star${fav ? " on" : ""}" ${addOn ? "" : "hidden"} ` +
+        `title="Show first on the Tesla page" aria-label="Favourite ${escape(p.name)}">${fav ? "\u2605" : "\u2606"}</button>` +
+        `</span>`;
 
-      const box = row.querySelector("input");
+      const sortChip = row.querySelector(".chip.sort");
+      const addChip = row.querySelector(".chip.add");
       const select = row.querySelector("select");
-      box.addEventListener("change", () => {
-        if (box.checked) state.selected.set(p.id, select.value);
-        else state.selected.delete(p.id);
-        select.hidden = !box.checked;
-        row.classList.toggle("on", box.checked);
+      const star = row.querySelector(".star");
+
+      const write = () => {
+        const on = sortChip.classList.contains("on");
+        const car = addChip.classList.contains("on");
+        if (!on && !car) state.selected.delete(p.id);
+        else state.selected.set(p.id, { sort: on, add: car, order: select.value });
+        select.hidden = !on;
+        star.hidden = !car;
+        row.classList.toggle("on", on || car);
         refreshSaveState();
-      });
-      // The row is a <label>, so a click anywhere in it would otherwise toggle
-      // the checkbox while the user is trying to pick an order.
-      select.addEventListener("click", (ev) => ev.preventDefault());
-      select.addEventListener("change", (ev) => {
-        ev.stopPropagation();
-        state.selected.set(p.id, select.value);
-        refreshSaveState();
+      };
+
+      const toggleChip = (chip) => {
+        const next = !chip.classList.contains("on");
+        chip.classList.toggle("on", next);
+        chip.setAttribute("aria-checked", String(next));
+        write();
+      };
+      sortChip.addEventListener("click", () => toggleChip(sortChip));
+      addChip.addEventListener("click", () => toggleChip(addChip));
+      select.addEventListener("change", write);
+
+      star.addEventListener("click", async () => {
+        const next = !state.favorites.has(p.id);
+        if (next) state.favorites.add(p.id); else state.favorites.delete(p.id);
+        star.classList.toggle("on", next);
+        star.textContent = next ? "\u2605" : "\u2606";
+        try {
+          await api("/api/favorite", { method: "POST", body: { playlist_id: p.id, favorite: next } });
+        } catch (err) {
+          // Favourites save immediately, so a failure has to roll back.
+          if (next) state.favorites.delete(p.id); else state.favorites.add(p.id);
+          star.classList.toggle("on", !next);
+          star.textContent = next ? "\u2606" : "\u2605";
+          toast(err.message, true);
+        }
       });
       host.appendChild(row);
     });
@@ -153,18 +213,27 @@
   }
 
   function sameSelection(a, b) {
-    return a.size === b.size && [...a].every(([id, order]) => b.get(id) === order);
+    if (a.size !== b.size) return false;
+    return [...a].every(([id, v]) => {
+      const other = b.get(id);
+      return other && other.sort === v.sort && other.add === v.add && other.order === v.order;
+    });
   }
 
   function refreshSaveState() {
     const dirty = !sameSelection(state.selected, state.saved);
     $("#save-selection").disabled = !dirty;
     $("#save-hint").textContent = dirty ? "Unsaved changes" : "";
-    $("#selcount").textContent = `${state.selected.size} selected`;
+    let sorted = 0, car = 0;
+    state.selected.forEach((v) => { if (v.sort) sorted++; if (v.add) car++; });
+    $("#selcount").textContent = `${sorted} sorted · ${car} on car`;
   }
 
   const entriesFromSelection = () =>
-    [...state.selected].map(([id, order]) => ({ id, order }));
+    [...state.selected].map(([id, v]) => ({
+      id, order: v.order, sort: v.sort, add: v.add,
+      favorite: state.favorites.has(id),
+    }));
 
   function renderTeslaLink(st) {
     const on = !!st.tesla_url;
@@ -201,6 +270,7 @@
     if (initial) {
       state.saved = toMap(st.entries);
       state.selected = toMap(st.entries);
+      state.favorites = toFavorites(st.entries);
     }
     $("#dashboard").hidden = !st.connected;
     $("#step-connect").hidden = !st.configured || st.connected;
@@ -211,6 +281,11 @@
     $("#default-order").value = st.default_order;
     $("#run-on-start").checked = !!st.run_on_start;
     $("#reauth").hidden = !st.connected || !(st.missing_scopes || []).length;
+    $("#auth-warning").hidden = !st.auth_warning;
+    $("#auth-on").hidden = !st.auth_enabled || st.auth_from_env;
+    $("#auth-env").hidden = !st.auth_from_env;
+    $("#password-form").hidden = !!st.auth_from_env;
+    $("#current-wrap").hidden = !st.auth_enabled || st.auth_from_env;
     renderTeslaLink(st);
     renderAccount();
     renderLastRun();
@@ -252,6 +327,26 @@
       try {
         await api("/api/settings", { method: "POST", body: { public_url: $("#public-url").value } });
         location.reload();  // the redirect URI shown above is rendered server-side
+      } catch (err) { toast(err.message, true); }
+    });
+  }
+
+  const passwordForm = $("#password-form");
+  if (passwordForm) {
+    passwordForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(passwordForm);
+      const next = String(fd.get("password") || "");
+      if (!next && !confirm("Remove the password and leave this page open to anyone who can reach it?")) return;
+      try {
+        const data = await api("/api/password", {
+          method: "POST",
+          body: { password: next, current: fd.get("current") || "" },
+        });
+        if (data.csrf_token) csrfToken = data.csrf_token;
+        passwordForm.reset();
+        toast(data.enabled ? "Password set" : "Password removed");
+        await poll();
       } catch (err) { toast(err.message, true); }
     });
   }

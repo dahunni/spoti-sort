@@ -79,6 +79,19 @@ Copy the Client ID and secret into the UI (or set them as environment variables)
 **Authorise with Spotify**, and pick your playlists. That's it — no shell, no manual
 first-run script.
 
+### 4. Choose what each playlist is for
+
+Every playlist has two independent switches:
+
+| Switch | Effect |
+| --- | --- |
+| **Sort** | Kept in date-added order on the schedule, with its own order direction. |
+| **Car** | Offered as a one-tap target on the [Tesla page](#tesla), with an optional ★. |
+
+They're unrelated. A "Discoveries" playlist you throw tracks into from the car never has
+to be reordered; a big archive you keep in date order never has to clutter the car screen.
+Turn both off and the playlist is simply deselected.
+
 > **Reaching the UI on another address?** If you browse to `http://192.168.1.50:8080` or
 > through a reverse proxy, type that address into the **address** field in step 2 of the
 > setup card — the redirect URI below it updates to match, and that's the value to paste
@@ -98,7 +111,8 @@ precedence where both exist.
 | `PORT` | `8080` | Port the UI listens on. |
 | `HOST` | `0.0.0.0` | Bind address. |
 | `CONFIG_DIR` | `/config` | Where settings and the token are stored. |
-| `UI_PASSWORD` | – | If set, the UI asks for this password. |
+| `UI_PASSWORD` | – | If set, the UI asks for this password. Can be set in the UI instead, where it is stored as a PBKDF2 hash. |
+| `TRUST_PROXY` | – | Set to `1` behind a reverse proxy so `X-Forwarded-Proto`/`-For` are honoured. |
 | `PLAYLIST_IDS` | – | Seeds the playlist selection on first boot. Accepts ids, URLs or `spotify:` URIs, separated by commas or whitespace. |
 | `INTERVAL_MINUTES` | `60` | Overrides the schedule. |
 | `SORT_ORDER` | `newest_first` | Default order for newly selected playlists: `newest_first` or `oldest_first`. Per-playlist orders are set in the UI. |
@@ -106,10 +120,15 @@ precedence where both exist.
 
 ### A note on exposure
 
-The UI has no authentication unless you set `UI_PASSWORD`, and anyone who reaches it can
-reorder your playlists. Keep it on your LAN, or set a password before putting it behind a
-reverse proxy. The [Tesla page](#tesla) is authenticated by its own link instead, and
-`UI_PASSWORD` does not apply to it — that's what lets the car use it.
+Set a password in **Access** before exposing this beyond your own network — the UI warns
+you when it's reachable at a non-loopback address without one. Passwords are stored as
+salted PBKDF2 hashes, logins are CSRF-protected and rate-limited with an escalating
+lockout, and responses carry a strict CSP plus `X-Frame-Options`, `nosniff` and
+`no-referrer`. Behind a reverse proxy set `TRUST_PROXY=1` so HTTPS and client addresses
+are detected correctly.
+
+The [Tesla page](#tesla) is authenticated by its own link instead, and the password does
+not apply to it — that's what lets the car use it without signing in.
 
 ## 🚗 The Tesla page <a name="tesla"></a>
 
@@ -118,12 +137,22 @@ enabled playlists with one tap — useful because the Tesla player can't add to 
 at all.
 
 Open **Tesla page → Create link** in the UI and bookmark the resulting URL in the car's
-browser. The link contains its own access key, so the car never sees your Spotify login
-and never has to sign in — but that also means **anyone with the link can use it**. It is
-deliberately narrow: it can read what's playing and append to the playlists you've already
-enabled, and nothing else. It cannot change settings, reach your other playlists, remove
-tracks, or see your credentials. **Regenerate** invalidates the old link; **Turn off**
-disables the page entirely.
+browser. Buttons are ordered ★ favourites first, then whichever you added to most
+recently. Tap a playlist to add the current track; tap it again while it's green to undo,
+which removes exactly the copy that tap created.
+
+The link contains its own access key, so the car never sees your Spotify login and never
+has to sign in — but that also means **anyone with the link can use it**. It is
+deliberately narrow. It can:
+
+- read what's currently playing, and
+- append the current track to a playlist you marked **Car**, or undo an add it just made.
+
+It cannot change settings, reach playlists you didn't mark **Car**, delete anything it
+didn't add itself, or see your credentials. Undo only ever removes the one copy a tap
+created, and only while spoti-sort still holds the record for it — everything else in the
+playlist is untouchable from the car. **Regenerate** invalidates the old link; **Turn
+off** disables the page entirely.
 
 Set the public address first, or the link will point at `127.0.0.1`, which the car can't
 reach. The UI warns you when that's the case.

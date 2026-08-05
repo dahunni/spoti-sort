@@ -158,9 +158,34 @@ class SpotifyClient:
             "addable": bool(item.get("uri")) and not item.get("is_local"),
         }
 
-    def add_to_playlist(self, playlist_id: str, uri: str) -> None:
-        _retry(lambda: self.sp.playlist_add_items(playlist_id, [uri]),
-               "add to %s" % playlist_id)
+    def add_to_playlist(self, playlist_id: str, uri: str) -> Dict[str, Any]:
+        """Append a track and return what's needed to undo it exactly.
+
+        The item lands at the end, so the current length is its position. Knowing
+        that lets an undo remove *that* copy via
+        ``playlist_remove_specific_occurrences_of_items`` rather than every
+        occurrence of the track, which would delete a legitimate earlier copy.
+        Costs one extra read per add, which is worth it to make undo safe.
+        """
+        meta = self.playlist_meta(playlist_id)
+        position = int(((meta.get("tracks") or {}).get("total")) or 0)
+        response = _retry(lambda: self.sp.playlist_add_items(playlist_id, [uri]),
+                          "add to %s" % playlist_id)
+        return {"position": position, "snapshot": (response or {}).get("snapshot_id")}
+
+    def remove_from_playlist(self, playlist_id: str, uri: str, position: int,
+                             snapshot: Optional[str]) -> None:
+        """Remove the single copy at ``position``.
+
+        The snapshot pins the playlist as it was just after the add; if anything
+        changed since (including one of our own sort runs) Spotify rejects this
+        rather than removing the wrong row.
+        """
+        _retry(
+            lambda: self.sp.playlist_remove_specific_occurrences_of_items(
+                playlist_id, [{"uri": uri, "positions": [position]}], snapshot_id=snapshot),
+            "remove from %s" % playlist_id,
+        )
 
     def playlist_meta(self, playlist_id: str) -> Dict[str, Any]:
         return _retry(

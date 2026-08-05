@@ -6,14 +6,18 @@ import functools
 import hmac
 import logging
 import time
+from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from flask import (Flask, abort, jsonify, redirect, render_template, request,
                    session, url_for)
 from spotipy.exceptions import SpotifyException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import Config, clamp_interval, clean_public_url
 from .scheduler import Scheduler
+from .security import (LoginLimiter, client_key, csrf_ok, new_csrf_token,
+                       trust_proxy)
 from .sorter import NEWEST_FIRST, OLDEST_FIRST
 from .spotify import NotAuthenticated, SpotifyClient, make_oauth, missing_scopes
 
@@ -97,41 +101,63 @@ class App:
         self._now_at = time.time()
         return self._now
 
-    def targets(self) -> List[Dict[str, str]]:
-        """Playlists the Tesla page may add to: the selected, editable ones."""
+    def targets(self) -> List[Dict[str, Any]]:
+        """Playlists the Tesla page may add to: the selected, editable ones.
+
+        Ordered for a screen you glance at while parked: starred first, then the
+        ones you actually used most recently, then everything else. That keeps the
+        playlist you keep reaching for under your thumb without any manual sorting.
+        """
         known: Dict[str, Dict[str, Any]] = {}
         try:
             known = {p["id"]: p for p in self.playlists()}
         except (NotAuthenticated, SpotifyException, OSError):
             pass
         out = []
-        for entry in self.config.entries:
+        for position, entry in enumerate(self.config.add_entries):
             meta = known.get(entry["id"])
             if meta and not meta.get("editable"):
                 continue
-            out.append({"id": entry["id"], "name": (meta or {}).get("name") or entry["id"]})
+            out.append({
+                "id": entry["id"],
+                "name": (meta or {}).get("name") or entry["id"],
+                "favorite": bool(entry.get("favorite")),
+                "last_used": float(entry.get("last_used") or 0.0),
+                "position": position,
+            })
+        out.sort(key=lambda t: (not t["favorite"], -t["last_used"], t["position"]))
         return out
 
     def _add_key(self, playlist_id: str, uri: str) -> str:
         return "%s|%s" % (playlist_id, uri)
 
-    def recently_added(self, playlist_id: str, uri: str) -> bool:
+    def _prune_adds(self) -> None:
         now = time.time()
-        for key, when in list(self._recent_adds.items()):
-            if now - when > ADD_GUARD_SECONDS:
+        for key, info in list(self._recent_adds.items()):
+            if now - info.get("at", 0) > ADD_GUARD_SECONDS:
                 del self._recent_adds[key]
-        return self._add_key(playlist_id, uri) in self._recent_adds
 
-    def remember_add(self, playlist_id: str, uri: str) -> None:
-        self._recent_adds[self._add_key(playlist_id, uri)] = time.time()
+    def recent_add(self, playlist_id: str, uri: str) -> Optional[Dict[str, Any]]:
+        """The undo record for a recent add, if there is one."""
+        self._prune_adds()
+        return self._recent_adds.get(self._add_key(playlist_id, uri))
+
+    def remember_add(self, playlist_id: str, uri: str, info: Dict[str, Any]) -> None:
+        record = dict(info)
+        record["at"] = time.time()
+        self._recent_adds[self._add_key(playlist_id, uri)] = record
+
+    def forget_add(self, playlist_id: str, uri: str) -> None:
+        self._recent_adds.pop(self._add_key(playlist_id, uri), None)
 
     # -- runs --------------------------------------------------------------
 
     def run_sort(self) -> Dict[str, Any]:
-        entries = self.config.entries
+        entries = self.config.sort_entries
         if not entries:
             return {"started_at": time.time(), "finished_at": time.time(), "duration": 0,
-                    "moves": 0, "ok": True, "playlists": [], "note": "no playlists selected"}
+                    "moves": 0, "ok": True, "playlists": [],
+                    "note": "no playlists are set to be sorted"}
         try:
             client = self.client()
         except NotAuthenticated as exc:
@@ -168,6 +194,10 @@ class App:
             "public_url_from_env": self.config.public_url_from_env,
             "missing_scopes": self.missing_scopes() if connected else [],
             "tesla_url": self.config.tesla_url,
+            "auth_enabled": self.config.auth_enabled,
+            "auth_from_env": self.config.ui_password_from_env,
+            # Reachable beyond this machine but with no password on the door.
+            "auth_warning": self.config.is_public and not self.config.auth_enabled,
             "now": time.time(),
             "next_run_at": self.scheduler.next_run_at,
             "running": self.scheduler.running,
@@ -185,9 +215,52 @@ def create_app(config: Optional[Config] = None) -> Flask:
     app.secret_key = config.secret_key()
     state = App(config)
     app.extensions["spotisort"] = state
+    limiter = LoginLimiter()
+
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        # Lax still sends the cookie on the top-level GET back from Spotify's
+        # redirect, but not on cross-site POSTs.
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=config.base_url.startswith("https://"),
+        PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+        MAX_CONTENT_LENGTH=256 * 1024,
+    )
+
+    hops = trust_proxy()
+    if hops:
+        # Without this, a reverse proxy's https is invisible and both the secure
+        # cookie flag and any generated URL come out as http.
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=hops, x_proto=hops, x_host=hops)
+
+    @app.after_request
+    def security_headers(response):
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            # Everything is served from this origin; album art comes from Spotify's
+            # CDN over https, and the mock uses a data: URI.
+            "default-src 'self'; img-src 'self' https: data:; style-src 'self'; "
+            "script-src 'self'; connect-src 'self'; form-action 'self'; "
+            "frame-ancestors 'none'; base-uri 'none'",
+        )
+        if request.path.startswith(("/tesla/", "/api/tesla/")):
+            # The URL is a credential; keep it out of shared caches and crawlers.
+            response.headers.setdefault("Cache-Control", "no-store")
+            response.headers.setdefault("X-Robots-Tag", "noindex, nofollow")
+        return response
 
     def authed() -> bool:
-        return not config.ui_password or session.get("ui_ok") is True
+        return not config.auth_enabled or session.get("ui_ok") is True
+
+    def ensure_csrf() -> str:
+        token = session.get("csrf")
+        if not token:
+            token = new_csrf_token()
+            session["csrf"] = token
+        return token
 
     def login_required(view):
         @functools.wraps(view)
@@ -196,6 +269,11 @@ def create_app(config: Optional[Config] = None) -> Flask:
                 if request.path.startswith("/api/"):
                     return jsonify({"error": "unauthorised"}), 401
                 return redirect(url_for("login", next=request.path))
+            # Session-cookie auth means a POST needs CSRF protection of its own;
+            # SameSite alone isn't a guarantee across all browsers.
+            if request.method == "POST" and config.auth_enabled:
+                if not csrf_ok(request.headers.get("X-CSRF-Token"), session.get("csrf")):
+                    return jsonify({"error": "stale session, reload the page"}), 403
             return view(*args, **kwargs)
         return wrapper
 
@@ -205,15 +283,37 @@ def create_app(config: Optional[Config] = None) -> Flask:
     def login():
         if authed():
             return redirect(url_for("index"))
-        return render_template("login.html", error=request.args.get("error"))
+        ensure_csrf()
+        return render_template("login.html", error=request.args.get("error"),
+                               csrf_token=session.get("csrf"))
 
     @app.post("/login")
     def do_login():
-        supplied = request.form.get("password", "")
-        if hmac.compare_digest(supplied, config.ui_password):
+        key = client_key(request.remote_addr)
+        wait = limiter.retry_after(key)
+        if wait > 0:
+            return redirect(url_for("login", error="Too many attempts. Try again in %d seconds."
+                                    % int(wait + 0.5)))
+        if not csrf_ok(request.form.get("csrf_token"), session.get("csrf")):
+            return redirect(url_for("login", error="Session expired, try again"))
+        if config.check_ui_password(request.form.get("password", "")):
+            limiter.record_success(key)
+            # New session identifier on privilege change, so a pre-set cookie can't
+            # be reused as an authenticated one.
+            session.clear()
             session["ui_ok"] = True
+            session["csrf"] = new_csrf_token()
             session.permanent = True
-            return redirect(request.args.get("next") or url_for("index"))
+            target = request.args.get("next") or url_for("index")
+            # Only ever redirect within this app.
+            if not target.startswith("/") or target.startswith("//"):
+                target = url_for("index")
+            return redirect(target)
+        delay = limiter.record_failure(key)
+        log.warning("failed UI login from %s", key)
+        if delay:
+            return redirect(url_for("login", error="Too many attempts. Try again in %d seconds."
+                                    % int(delay + 0.5)))
         return redirect(url_for("login", error="Wrong password"))
 
     @app.post("/logout")
@@ -224,8 +324,10 @@ def create_app(config: Optional[Config] = None) -> Flask:
     @app.get("/")
     @login_required
     def index():
-        return render_template("index.html", status=state.status(),
-                               has_password=bool(config.ui_password))
+        status = state.status()
+        return render_template("index.html", status=status,
+                               has_password=config.auth_enabled,
+                               bootstrap={"status": status, "csrf": ensure_csrf()})
 
     @app.get("/healthz")
     def healthz():
@@ -344,11 +446,39 @@ def create_app(config: Optional[Config] = None) -> Flask:
     def api_run():
         if not state.connected:
             return jsonify({"error": "not connected to Spotify"}), 409
-        if not config.playlists:
-            return jsonify({"error": "no playlists selected"}), 400
+        if not config.sort_entries:
+            return jsonify({"error": "no playlists are set to be sorted"}), 400
         if not state.scheduler.trigger():
             return jsonify({"error": "a run is already in progress"}), 409
         return jsonify({"ok": True})
+
+    @app.post("/api/favorite")
+    @login_required
+    def api_favorite():
+        body = request.get_json(silent=True) or {}
+        playlist_id = str(body.get("playlist_id") or "")
+        if not config.set_favorite(playlist_id, bool(body.get("favorite"))):
+            return jsonify({"error": "that playlist is not selected"}), 404
+        return jsonify({"ok": True, "entries": config.entries})
+
+    @app.post("/api/password")
+    @login_required
+    def api_password():
+        if config.ui_password_from_env:
+            return jsonify({"error": "the password is set by UI_PASSWORD"}), 400
+        body = request.get_json(silent=True) or {}
+        new = str(body.get("password") or "")
+        # Changing an existing password requires the old one, so a browser left
+        # logged in on a shared machine can't be used to lock the owner out.
+        if config.auth_enabled and not config.check_ui_password(str(body.get("current") or "")):
+            return jsonify({"error": "current password is wrong"}), 403
+        if new and len(new) < 8:
+            return jsonify({"error": "use at least 8 characters"}), 400
+        config.set_ui_password(new)
+        session["ui_ok"] = True
+        session["csrf"] = new_csrf_token()
+        return jsonify({"ok": True, "enabled": config.auth_enabled,
+                        "csrf_token": session["csrf"]})
 
     @app.post("/api/tesla-link")
     @login_required
@@ -373,10 +503,15 @@ def create_app(config: Optional[Config] = None) -> Flask:
         @functools.wraps(view)
         def wrapper(token, *args, **kwargs):
             good = config.tesla_token
+            key = "tesla:" + client_key(request.remote_addr)
+            if limiter.retry_after(key) > 0:
+                abort(404)
             # 404 rather than 401: a revoked or mistyped link shouldn't confirm
             # that the endpoint exists.
             if not good or not hmac.compare_digest(str(token), good):
+                limiter.record_failure(key)
                 abort(404)
+            limiter.record_success(key)
             return view(*args, **kwargs)
         return wrapper
 
@@ -400,32 +535,72 @@ def create_app(config: Optional[Config] = None) -> Flask:
         targets = state.targets()
         uri = now.get("uri") or ""
         for target in targets:
-            target["added"] = state.recently_added(target["id"], uri) if uri else False
+            target["added"] = bool(state.recent_add(target["id"], uri)) if uri else False
         return jsonify({"now": now, "targets": targets})
 
-    @app.post("/api/tesla/<token>/add")
-    @tesla_auth
-    def tesla_add():
+    def _tesla_request():
+        """Validate an add/remove body. Returns (playlist_id, uri) or an error response."""
         body = request.get_json(silent=True) or {}
         playlist_id = str(body.get("playlist_id") or "")
         uri = str(body.get("uri") or "")
         if not playlist_id or not uri:
-            return jsonify({"error": "missing playlist or track"}), 400
-        # Containment: the link may only add to playlists already selected in the
+            return None, (jsonify({"error": "missing playlist or track"}), 400)
+        # Containment: the link may only touch playlists already selected in the
         # main UI, so a leaked URL cannot reach the rest of the account.
         if playlist_id not in {t["id"] for t in state.targets()}:
-            return jsonify({"error": "that playlist is not enabled"}), 403
-        if state.recently_added(playlist_id, uri):
+            return None, (jsonify({"error": "that playlist is not enabled"}), 403)
+        return (playlist_id, uri), None
+
+    @app.post("/api/tesla/<token>/add")
+    @tesla_auth
+    def tesla_add():
+        parsed, error = _tesla_request()
+        if error:
+            return error
+        playlist_id, uri = parsed
+        if state.recent_add(playlist_id, uri):
             return jsonify({"ok": True, "duplicate": True, "message": "Already added"})
         try:
-            state.client().add_to_playlist(playlist_id, uri)
+            info = state.client().add_to_playlist(playlist_id, uri)
         except NotAuthenticated:
             return jsonify({"error": "spoti-sort is not connected to Spotify"}), 503
         except SpotifyException as exc:
             return jsonify({"error": exc.msg or "Spotify rejected the add"}), 502
-        state.remember_add(playlist_id, uri)
+        state.remember_add(playlist_id, uri, info)
+        config.touch_entry(playlist_id)      # feeds the recently-used ordering
         log.info("tesla: added %s to %s", uri, playlist_id)
         return jsonify({"ok": True, "message": "Added"})
+
+    @app.post("/api/tesla/<token>/remove")
+    @tesla_auth
+    def tesla_remove():
+        """Undo an add made from this page.
+
+        Only undoes adds we still hold a record for, and only the exact copy that
+        add created — never an earlier copy of the same track that was already in
+        the playlist.
+        """
+        parsed, error = _tesla_request()
+        if error:
+            return error
+        playlist_id, uri = parsed
+        info = state.recent_add(playlist_id, uri)
+        if not info:
+            return jsonify({"error": "nothing to undo for this track"}), 409
+        try:
+            state.client().remove_from_playlist(
+                playlist_id, uri, int(info.get("position") or 0), info.get("snapshot"))
+        except NotAuthenticated:
+            return jsonify({"error": "spoti-sort is not connected to Spotify"}), 503
+        except SpotifyException as exc:
+            if exc.http_status in (400, 404):
+                # Stale snapshot: the playlist moved on (very likely one of our own
+                # sort runs). Removing blind could delete the wrong row.
+                return jsonify({"error": "Playlist changed since — remove it in Spotify"}), 409
+            return jsonify({"error": exc.msg or "Spotify rejected the removal"}), 502
+        state.forget_add(playlist_id, uri)
+        log.info("tesla: removed %s from %s", uri, playlist_id)
+        return jsonify({"ok": True, "message": "Removed"})
 
     @app.errorhandler(404)
     def not_found(_exc):

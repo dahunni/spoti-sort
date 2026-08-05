@@ -68,11 +68,13 @@ body { overflow-x: hidden; }
 }
 .target:active { transform: scale(.985); background: var(--panel-2); }
 .target .tick { font-size: 22px; color: var(--accent); opacity: 0; flex: none; }
+.target .star { display: none; font-size: 17px; color: #f2c14e; flex: none; margin-right: -4px; }
+.target.fav .star { display: inline; }
 .target.done { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); }
 .target.done .tick { opacity: 1; }
 .target.busy { opacity: .55; }
 .target[disabled] { cursor: default; }
-.target .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.target .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .note { text-align: center; color: var(--muted); font-size: 15px; margin: 0; min-height: 20px; }
 
