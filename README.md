@@ -18,6 +18,10 @@ like the one in a Tesla.
 <br>
 </p>
 
+<p align="center">
+  <img src="docs/ui-playlists.png" alt="The spoti-sort web UI: a countdown to the next run above a list of playlists, each with a Sort and a Car toggle and its own sort order" width="792">
+</p>
+
 ## 📝 Table of Contents
 
 - [About](#about)
@@ -151,6 +155,10 @@ A single bookmarkable page for the car. It shows what's playing and adds it to o
 enabled playlists with one tap — useful because the Tesla player can't add to a playlist
 at all.
 
+<p align="center">
+  <img src="docs/tesla-page.png" alt="The car page: large album art and track title above big playlist buttons, one of them marked as already containing the track" width="900">
+</p>
+
 **A password is required before a link can be created.** The link authenticates by URL
 alone, so on an instance with no password it would be the only lock on the door; removing
 the password later turns the link off too.
@@ -190,9 +198,17 @@ old link; **Turn off** disables the page entirely.
 The car's browser can't paste, and the link is far too long to retype. So instead of
 typing it, open **Tesla page → Create pairing code** and you get four digits:
 
+<p align="center">
+  <img src="docs/pairing-code.png" alt="The pairing code block in the web UI, showing four large digits and how long they remain valid" width="714">
+</p>
+
 1. In the car, open this instance's normal address and you'll get the sign-in page.
 2. Type the four digits into **Open the car page** — no password needed.
 3. It redirects straight to the Tesla page, ready to bookmark.
+
+<p align="center">
+  <img src="docs/pairing-login.png" alt="The sign-in page as the car sees it: the usual password box, and below it a second card with a four-digit code field" width="560">
+</p>
 
 The code is **single use** and **expires after eight hours**. The input box only appears
 on the sign-in page while a code is actually live, so there is normally nothing there to
