@@ -11,4 +11,21 @@
     <button class="btn primary" type="submit">Continue</button>
   </form>
 </section>
+
+{% if pairing_active %}
+{# Only rendered while a code is live, so there is normally nothing here to try. #}
+<section class="card narrow">
+  <h2>Open the car page</h2>
+  <p class="muted">Enter the four-digit code shown in spoti-sort.</p>
+  <form method="post" action="{{ url_for('do_pair') }}" class="row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {# inputmode gives the car's browser a numeric keypad instead of a full one. #}
+    <input type="text" name="code" class="codeinput" inputmode="numeric"
+           pattern="[0-9]{4}" maxlength="4" placeholder="0000"
+           autocomplete="off" required>
+    <button class="btn primary" type="submit">Open</button>
+  </form>
+  <p class="hint">One use only, and it stops working after eight hours.</p>
+</section>
+{% endif %}
 {% endblock %}

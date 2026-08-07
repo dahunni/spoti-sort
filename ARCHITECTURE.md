@@ -137,10 +137,17 @@ Two independent doors:
 
 - **UI** — optional password (PBKDF2, or `UI_PASSWORD`), session cookie, CSRF header on
   every state-changing request, escalating per-address lockout.
-- **Tesla link** — a URL-borne token, no session. Deliberately narrow: read playback, append
-  to a playlist marked `add`, undo its own add. **A UI password is required before a link can
-  exist**, and removing the password revokes the link — the link bypasses login by design, so
-  it must never be the only lock. Wrong tokens 404 (not 401) and are rate-limited.
+- **Tesla link** — a URL-borne token, no session. Deliberately narrow: read playback, and add
+  or remove the currently playing track on a playlist marked `add`. **A UI password is
+  required before a link can exist**, and removing the password revokes the link — the link
+  bypasses login by design, so it must never be the only lock. Wrong tokens 404 (not 401)
+  and are rate-limited.
+- **Pairing code** — four digits, traded on the sign-in page for a redirect to the Tesla
+  link, because the car's browser cannot paste. Grants that one URL and never a session.
+  Single use, 8h TTL, and only rendered as an input while a code is live. The space is tiny
+  (10,000), so it leans on two caps: the per-address lockout, and the code burning itself
+  after `PAIRING_MAX_ATTEMPTS` misses from anywhere. Cleared whenever the link it points at
+  is regenerated, disabled, or revoked with the password.
 
 ## Testing
 

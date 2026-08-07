@@ -113,12 +113,18 @@ enabled playlists with one tap. The link carries its own access key, so the car 
 in — which is also why **a UI password is required before a link can be created**, and why
 removing the password revokes the link.
 
-The link is deliberately narrow. It can read what's playing and append the current track to
-a playlist you marked **Car**, or undo an add it just made. It cannot change settings, reach
-other playlists, delete anything it didn't add, or see your credentials.
+The link is deliberately narrow. It can read what's playing and add the current track to a
+playlist you marked **Car**, or take that same track back off one. It cannot change
+settings, reach other playlists, touch any track other than the one playing, or see your
+credentials.
 
 Added tracks land where the playlist's order says they belong — top of a newest-first
 playlist, end of an oldest-first one — so they're in the right place immediately.
+
+Because the car's browser can't paste and the link is too long to retype, **Create pairing
+code** gives you four digits to type into the sign-in page from the car instead; it
+redirects straight to the Tesla page. Single use, expires after eight hours, and only shown
+as an input while a code is live.
 
 ## Tags and architectures
 
