@@ -515,6 +515,146 @@ class TeslaOnboardingTest(unittest.TestCase):
         self.assertFalse(cfg.tesla_onboarded)
 
 
+class PairingCodeTest(unittest.TestCase):
+    """The short code that stands in for the un-pasteable Tesla link."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        for var in ("PUBLIC_URL", "UI_PASSWORD"):
+            os.environ.pop(var, None)
+
+    def load(self):
+        from spotisort.config import Config
+        return Config(self.tmp)
+
+    def test_absent_by_default(self):
+        cfg = self.load()
+        self.assertEqual(cfg.pairing_code, "")
+        self.assertFalse(cfg.pairing_active)
+        self.assertEqual(cfg.pairing_expires_at, 0.0)
+
+    def test_is_four_digits_and_survives_a_restart(self):
+        cfg = self.load()
+        code = cfg.new_pairing_code()
+        self.assertRegex(code, r"^\d{4}$")
+        self.assertEqual(self.load().pairing_code, code)
+
+    def test_single_use(self):
+        cfg = self.load()
+        code = cfg.new_pairing_code()
+        self.assertTrue(cfg.consume_pairing_code(code))
+        # Gone immediately, and gone for the next process too.
+        self.assertFalse(cfg.consume_pairing_code(code))
+        self.assertFalse(self.load().pairing_active)
+
+    def test_wrong_code_leaves_the_real_one_usable(self):
+        cfg = self.load()
+        code = cfg.new_pairing_code()
+        wrong = "%04d" % ((int(code) + 1) % 10000)
+        self.assertFalse(cfg.consume_pairing_code(wrong))
+        self.assertTrue(cfg.consume_pairing_code(code))
+
+    def test_expires(self):
+        import time
+        from spotisort.config import PAIRING_TTL
+        cfg = self.load()
+        code = cfg.new_pairing_code()
+        self.assertGreater(cfg.pairing_expires_at, time.time() + PAIRING_TTL - 60)
+        cfg.update(pairing_expires_at=time.time() - 1)
+        self.assertEqual(cfg.pairing_code, "")
+        self.assertFalse(cfg.pairing_active)
+        self.assertFalse(cfg.consume_pairing_code(code))
+
+    def test_guessing_burns_the_code(self):
+        # Four digits is small enough that the attempt cap, not the arithmetic,
+        # is what makes guessing hopeless.
+        from spotisort.config import PAIRING_MAX_ATTEMPTS
+        cfg = self.load()
+        code = cfg.new_pairing_code()
+        wrong = "%04d" % ((int(code) + 1) % 10000)
+        for _ in range(PAIRING_MAX_ATTEMPTS):
+            cfg.consume_pairing_code(wrong)
+        self.assertFalse(cfg.pairing_active)
+        self.assertFalse(cfg.consume_pairing_code(code))
+
+    def test_cancelling_clears_it(self):
+        cfg = self.load()
+        cfg.new_pairing_code()
+        cfg.clear_pairing_code()
+        self.assertFalse(self.load().pairing_active)
+
+
+class PairingRouteTest(unittest.TestCase):
+    """End to end: the car types four digits and lands on the Tesla page."""
+
+    def setUp(self):
+        import tempfile
+        from spotisort.config import Config
+        from spotisort.web import create_app
+        for var in ("PUBLIC_URL", "UI_PASSWORD"):
+            os.environ.pop(var, None)
+        self.cfg = Config(tempfile.mkdtemp())
+        self.cfg.set_ui_password("hunter2hunter2")
+        self.token = self.cfg.new_tesla_token()
+        self.client = create_app(self.cfg).test_client()
+
+    def post(self, code, addr="10.0.0.9"):
+        with self.client.session_transaction() as sess:
+            sess["csrf"] = "csrf-for-test"
+        return self.client.post("/login/pair", data={"code": code, "csrf_token": "csrf-for-test"},
+                                environ_base={"REMOTE_ADDR": addr})
+
+    def test_the_box_is_absent_until_a_code_exists(self):
+        self.assertNotIn('name="code"', self.client.get("/login").get_data(as_text=True))
+        self.cfg.new_pairing_code()
+        self.assertIn('name="code"', self.client.get("/login").get_data(as_text=True))
+
+    def test_the_code_itself_never_reaches_the_login_page(self):
+        code = self.cfg.new_pairing_code()
+        self.assertNotIn(code, self.client.get("/login").get_data(as_text=True))
+
+    def test_correct_code_redirects_to_the_tesla_page(self):
+        code = self.cfg.new_pairing_code()
+        response = self.post(code)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/tesla/" + self.token)
+
+    def test_the_code_does_not_grant_the_admin_ui(self):
+        # It is a delivery mechanism for one URL, not a second password.
+        self.post(self.cfg.new_pairing_code())
+        self.assertEqual(self.client.get("/").status_code, 302)
+        self.assertEqual(self.client.get("/api/status").status_code, 401)
+
+    def test_a_code_works_only_once(self):
+        code = self.cfg.new_pairing_code()
+        self.post(code)
+        self.assertIn("error=", self.post(code).headers["Location"])
+
+    def test_pairing_asks_the_new_car_to_bookmark_the_link(self):
+        self.cfg.mark_tesla_onboarded()
+        self.post(self.cfg.new_pairing_code())
+        self.assertFalse(self.cfg.tesla_onboarded)
+        self.assertIn("Save this page first",
+                      self.client.get("/tesla/" + self.token).get_data(as_text=True))
+
+    def test_repeated_guesses_from_one_address_get_locked_out(self):
+        # The per-address lockout bites well before the code's own attempt cap,
+        # so a single guesser never gets near enumerating 10,000 combinations.
+        from spotisort.security import MAX_FAILURES
+        code = self.cfg.new_pairing_code()
+        wrong = "%04d" % ((int(code) + 1) % 10000)
+        for _ in range(MAX_FAILURES):
+            self.post(wrong)
+        self.assertIn("Too+many+attempts", self.post(code).headers["Location"])
+
+    def test_turning_the_link_off_invalidates_a_pending_code(self):
+        code = self.cfg.new_pairing_code()
+        self.cfg.clear_tesla_token()
+        self.cfg.clear_pairing_code()
+        self.assertIn("error=", self.post(code).headers["Location"])
+
+
 class PasswordTest(unittest.TestCase):
     def test_round_trip(self):
         from spotisort.security import hash_password, verify_password

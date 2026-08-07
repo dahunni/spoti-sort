@@ -100,6 +100,15 @@ a { color: inherit; text-decoration-color: var(--accent); text-underline-offset:
   -webkit-user-select: all; user-select: all;
 }
 .copyrow code::selection { background: var(--accent); color: var(--accent-ink); }
+/* Pairing code: the owner reads these four digits off this screen and types them
+   into the car, so they are sized to stay legible from a step back. */
+.pairbox { margin: 16px 0 4px; padding-top: 14px; border-top: 1px solid var(--line); }
+.pairbox h3 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+.paircode {
+  display: inline-block; margin: 2px 0 4px; padding: 6px 16px;
+  font-size: 30px; font-weight: 700; letter-spacing: .22em;
+  color: var(--accent); background: var(--panel-2);
+}
 .urlrow { display: flex; gap: 8px; align-items: center; margin: 7px 0 2px; flex-wrap: wrap; }
 .urlrow input { margin-top: 0; flex: 1; min-width: 180px; }
 .urlrow .btn { flex: none; }
@@ -124,6 +133,13 @@ input:focus-visible, select:focus-visible, button:focus-visible {
 .grid2 button { grid-column: 1 / -1; justify-self: start; }
 .row { display: flex; gap: 8px; align-items: flex-start; }
 .row input { margin-top: 0; }
+/* Sized to the four digits rather than the row, and big enough to check at a
+   glance on a car touchscreen. Must sit after the base `input { width: 100% }`
+   rule above, which it ties with on specificity. */
+.row input.codeinput {
+  flex: none; width: 7ch; text-align: center;
+  font-size: 22px; font-weight: 700; letter-spacing: .18em;
+}
 .check { display: flex; align-items: center; gap: 8px; font-weight: 500; margin: 6px 0 0; }
 .check input { width: auto; }
 

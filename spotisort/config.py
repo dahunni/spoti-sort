@@ -42,12 +42,26 @@ DEFAULTS: Dict[str, Any] = {
     # Kept server-side on purpose: the Tesla browser routinely loses cookies and
     # local storage, so a client-side flag would reappear on every drive.
     "tesla_onboarded": False,
+    # Short numeric code that trades itself for the Tesla link on the sign-in
+    # page. Single use, short lived, and absent unless the owner just minted one.
+    "pairing_code": "",
+    "pairing_expires_at": 0.0,
+    "pairing_attempts": 0,
     # PBKDF2 hash of the UI password when set through the web UI. The UI_PASSWORD
     # environment variable is an alternative and takes precedence.
     "ui_password_hash": "",
 }
 
 ORDERS = (NEWEST_FIRST, OLDEST_FIRST)
+
+# Pairing code lifetime. Long enough to cover "set it up now, walk to the car
+# later", short enough that a forgotten one is not a standing back door.
+PAIRING_TTL = 8 * 3600
+
+# Four digits is 10,000 possibilities, so the per-address lockout on the login
+# route is not enough on its own — a code also burns itself after this many wrong
+# guesses from anywhere, capping the odds of a hit at roughly one in a thousand.
+PAIRING_MAX_ATTEMPTS = 10
 
 MIN_INTERVAL = 5
 MAX_INTERVAL = 60 * 24 * 7
@@ -280,6 +294,9 @@ class Config:
     def mark_tesla_onboarded(self) -> None:
         self.update(tesla_onboarded=True)
 
+    def reset_tesla_onboarded(self) -> None:
+        self.update(tesla_onboarded=False)
+
     def new_tesla_token(self) -> str:
         # url-safe and long enough that guessing it is not a concern; it is the
         # only credential the car presents.
@@ -290,6 +307,65 @@ class Config:
 
     def clear_tesla_token(self) -> None:
         self.update(tesla_token="")
+
+    # -- tesla pairing code ------------------------------------------------
+    #
+    # The car's browser cannot paste and the Tesla link is 30-odd random
+    # characters, so typing it in is not realistic. Instead the owner mints a
+    # four-digit code in the desktop UI and enters that on the sign-in page from
+    # the car; a correct code answers with a redirect to the real link, which the
+    # car then bookmarks and never needs again.
+    #
+    # The code is stored as typed rather than hashed. config.json already holds
+    # `tesla_token` in the clear right beside it, so hashing four digits would
+    # protect nothing that is not already readable to the same eyes.
+
+    @property
+    def pairing_code(self) -> str:
+        """The live code, or "" when there is none or it has expired."""
+        code = str(self._data["pairing_code"] or "")
+        if not code or time.time() >= float(self._data["pairing_expires_at"] or 0):
+            return ""
+        return code
+
+    @property
+    def pairing_active(self) -> bool:
+        return bool(self.pairing_code)
+
+    @property
+    def pairing_expires_at(self) -> float:
+        return float(self._data["pairing_expires_at"] or 0) if self.pairing_active else 0.0
+
+    def new_pairing_code(self) -> str:
+        code = "%04d" % secrets.randbelow(10000)
+        self.update(pairing_code=code, pairing_attempts=0,
+                    pairing_expires_at=time.time() + PAIRING_TTL)
+        return code
+
+    def clear_pairing_code(self) -> None:
+        self.update(pairing_code="", pairing_expires_at=0.0, pairing_attempts=0)
+
+    def consume_pairing_code(self, supplied: str) -> bool:
+        """Check a code and spend it. True only on an exact match of a live one.
+
+        Single use by construction: a hit clears the code, and so does the
+        `PAIRING_MAX_ATTEMPTS`-th miss, so a guessing run destroys the thing it is
+        trying to guess long before it can enumerate the space.
+        """
+        live = self.pairing_code
+        if not live:
+            if self._data["pairing_code"]:
+                self.clear_pairing_code()   # expired; tidy it off disk
+            return False
+        if hmac.compare_digest(str(supplied or ""), live):
+            self.clear_pairing_code()
+            return True
+        attempts = int(self._data["pairing_attempts"] or 0) + 1
+        if attempts >= PAIRING_MAX_ATTEMPTS:
+            self.clear_pairing_code()
+        else:
+            self.update(pairing_attempts=attempts)
+        return False
 
     @property
     def port(self) -> int:

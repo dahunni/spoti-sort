@@ -162,10 +162,12 @@ local storage, and the URL is the only way back in, so that flag is stored on th
 rather than in the browser. Regenerating the link brings the instruction back.
 
 Each playlist button shows its cover art, and one that **already contains the current
-track** is dimmed and marked rather than offered — the check covers copies added at any
-time from anywhere, not just this session. Buttons are ordered ★ favourites first, then
-whichever you added to most recently. Tap a playlist to add the current track; tap it
-again while it's green to undo, which removes exactly the copy that tap created.
+track** is dimmed and marked — the check covers copies added at any time from anywhere,
+not just this session. Buttons are ordered ★ favourites first, then whichever you added to
+most recently. Tap a playlist to add the current track; tap it again to take it back off.
+Undoing an add made from this page removes exactly the copy that tap created; removing a
+track that was already there removes every copy of it, since there is no single position
+to undo.
 
 An added track lands where the playlist's own order says it should: at the top of a
 newest-first playlist, at the end of an oldest-first one. It is in the right place
@@ -176,13 +178,30 @@ has to sign in — but that also means **anyone with the link can use it**. It i
 deliberately narrow. It can:
 
 - read what's currently playing, and
-- append the current track to a playlist you marked **Car**, or undo an add it just made.
+- add the current track to a playlist you marked **Car**, or take that same track back off
+  one.
 
-It cannot change settings, reach playlists you didn't mark **Car**, delete anything it
-didn't add itself, or see your credentials. Undo only ever removes the one copy a tap
-created, and only while spoti-sort still holds the record for it — everything else in the
-playlist is untouchable from the car. **Regenerate** invalidates the old link; **Turn
-off** disables the page entirely.
+It cannot change settings, reach playlists you didn't mark **Car**, touch any track other
+than the one currently playing, or see your credentials. **Regenerate** invalidates the
+old link; **Turn off** disables the page entirely.
+
+### Pairing code
+
+The car's browser can't paste, and the link is far too long to retype. So instead of
+typing it, open **Tesla page → Create pairing code** and you get four digits:
+
+1. In the car, open this instance's normal address and you'll get the sign-in page.
+2. Type the four digits into **Open the car page** — no password needed.
+3. It redirects straight to the Tesla page, ready to bookmark.
+
+The code is **single use** and **expires after eight hours**. The input box only appears
+on the sign-in page while a code is actually live, so there is normally nothing there to
+guess at. A code also destroys itself after ten wrong guesses from anywhere, and the usual
+per-address lockout applies on top of that — four digits is only 10,000 combinations, so
+that cap, not the arithmetic, is what makes guessing hopeless.
+
+Redeeming a code grants the Tesla page and nothing else. It is a delivery mechanism for a
+URL, not a second password: it never signs you into the UI.
 
 Set the public address first, or the link will point at `127.0.0.1`, which the car can't
 reach. The UI warns you when that's the case.

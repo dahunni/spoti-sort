@@ -72,7 +72,20 @@
     return `${s}s`;
   }
 
+  // The code expires on the server whether or not this tab is open, so the label
+  // counts down live rather than showing a stale "8h" from the last poll.
+  function tickPairing() {
+    const st = state.status;
+    const box = $("#pair-expiry");
+    if (!box || !st.pairing_code) return;
+    const left = st.pairing_expires_at - (Date.now() / 1000 + state.skew);
+    box.textContent = left > 0
+      ? `Expires in ${humanise(left)} · single use`
+      : "Expired.";
+  }
+
   function tick() {
+    tickPairing();
     const st = state.status;
     if (!st.next_run_at) return;
     const now = Date.now() / 1000 + state.skew;
@@ -250,6 +263,11 @@
       $("#tesla-url").textContent = st.tesla_url;
       $("#tesla-open").href = st.tesla_url;
     }
+    const paired = !!st.pairing_code;
+    $("#pair-on").hidden = !paired;
+    $("#pair-off").hidden = paired;
+    if (paired) $("#pair-code").textContent = st.pairing_code;
+    tickPairing();
     // The link is only reachable from the car if the base address is right, and the
     // loopback default never is.
     const loopback = /^https?:\/\/(127\.0\.0\.1|localhost)\b/.test(st.tesla_url || "");
@@ -539,6 +557,9 @@
     try {
       const data = await api("/api/tesla-link", { method: "POST", body: { action } });
       state.status.tesla_url = data.tesla_url;
+      // A new or removed link invalidates any code pointing at the old one.
+      state.status.pairing_code = "";
+      state.status.pairing_expires_at = 0;
       renderTeslaLink(state.status);
       toast(data.tesla_url ? "Link ready" : "Link turned off");
     } catch (err) { toast(err.message, true); }
@@ -549,6 +570,20 @@
       teslaAction("regenerate", "Generate a new link? The one saved in the car will stop working."));
     $("#tesla-disable").addEventListener("click", () =>
       teslaAction("disable", "Turn off the Tesla page? The saved link will stop working."));
+  }
+
+  const pairAction = async (action) => {
+    try {
+      const data = await api("/api/tesla-pair", { method: "POST", body: { action } });
+      state.status.pairing_code = data.pairing_code;
+      state.status.pairing_expires_at = data.pairing_expires_at;
+      renderTeslaLink(state.status);
+      toast(data.pairing_code ? `Code ${data.pairing_code} — type it in the car` : "Code cancelled");
+    } catch (err) { toast(err.message, true); }
+  };
+  if ($("#pair-create")) {
+    $("#pair-create").addEventListener("click", () => pairAction("create"));
+    $("#pair-cancel").addEventListener("click", () => pairAction("cancel"));
   }
 
   // Set while the user has deliberately reopened the credentials form, so the

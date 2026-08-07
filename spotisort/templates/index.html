@@ -226,6 +226,20 @@
         <a class="btn ghost small" id="tesla-open" target="_blank" rel="noopener noreferrer">Open</a>
       </div>
       <p class="hint">Bookmark this in the car's browser. Anyone with the link can see what you're playing and add tracks to the playlists you've enabled above — it can't change settings, reach your other playlists, or remove anything. Regenerate to invalidate the old link.</p>
+
+      <div class="pairbox">
+        <h3>Pairing code</h3>
+        <div id="pair-off">
+          <p class="hint" style="margin-top:0">The car's browser can't paste, and the link above is far too long to retype. Create a short code instead: open this instance's sign-in page in the car, type the four digits, and it goes straight to the car page ready to bookmark.</p>
+          <button class="btn ghost small" id="pair-create">Create pairing code</button>
+        </div>
+        <div id="pair-on" hidden>
+          <code class="paircode" id="pair-code">0000</code>
+          <p class="hint" id="pair-expiry"></p>
+          <button class="btn ghost small" id="pair-cancel">Cancel code</button>
+        </div>
+      </div>
+
       <div class="saverow">
         <button class="btn ghost small" id="tesla-regen">Regenerate</button>
         <button class="btn ghost small" id="tesla-disable">Turn off</button>

@@ -244,6 +244,10 @@ class App:
             "public_url_from_env": self.config.public_url_from_env,
             "missing_scopes": self.missing_scopes() if connected else [],
             "tesla_url": self.config.tesla_url,
+            # Only ever reaches an authenticated caller: `status()` is behind
+            # `login_required` on both the page bootstrap and /api/status.
+            "pairing_code": self.config.pairing_code,
+            "pairing_expires_at": self.config.pairing_expires_at,
             "auth_enabled": self.config.auth_enabled,
             "auth_from_env": self.config.ui_password_from_env,
             # Reachable beyond this machine but with no password on the door.
@@ -339,7 +343,10 @@ def create_app(config: Optional[Config] = None) -> Flask:
         if authed():
             return redirect(url_for("index"))
         ensure_csrf()
+        # The code box is rendered only while a code is actually live, so an
+        # instance with none offers nothing to guess at.
         return render_template("login.html", error=request.args.get("error"),
+                               pairing_active=config.pairing_active,
                                csrf_token=session.get("csrf"))
 
     @app.post("/login")
@@ -370,6 +377,40 @@ def create_app(config: Optional[Config] = None) -> Flask:
             return redirect(url_for("login", error="Too many attempts. Try again in %d seconds."
                                     % int(delay + 0.5)))
         return redirect(url_for("login", error="Wrong password"))
+
+    @app.post("/login/pair")
+    def do_pair():
+        """Trade a four-digit code for the Tesla link.
+
+        Deliberately not a login: a correct code grants the Tesla page and
+        nothing else — no session, no UI access. It is a delivery mechanism for a
+        URL the car cannot be made to paste, so it can only ever hand over what
+        that URL already grants.
+        """
+        key = "pair:" + client_key(request.remote_addr)
+        wait = limiter.retry_after(key)
+        if wait > 0:
+            return redirect(url_for("login", error="Too many attempts. Try again in %d seconds."
+                                    % int(wait + 0.5)))
+        if not csrf_ok(request.form.get("csrf_token"), session.get("csrf")):
+            return redirect(url_for("login", error="Session expired, try again"))
+        # Checked before the code is spent, so a link turned off mid-window does
+        # not silently burn the owner's one attempt.
+        token = config.tesla_token
+        if not token or not config.pairing_active:
+            return redirect(url_for("login", error="That code is no longer valid"))
+        if not config.consume_pairing_code(request.form.get("code", "")):
+            limiter.record_failure(key)
+            log.warning("wrong tesla pairing code from %s", key)
+            return redirect(url_for("login", error="Wrong code"))
+        limiter.record_success(key)
+        # A freshly paired car has never seen the bookmark instruction, and the
+        # link is the only way back in once this page is closed.
+        config.reset_tesla_onboarded()
+        log.info("tesla pairing code redeemed from %s", key)
+        # Relative on purpose: the car just reached us on an address that works,
+        # whereas `public_url` may still be the loopback default.
+        return redirect("/tesla/" + token)
 
     @app.post("/logout")
     def logout():
@@ -570,6 +611,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
         revoked = False
         if not config.auth_enabled and config.tesla_token:
             config.clear_tesla_token()
+            config.clear_pairing_code()
             revoked = True
         session["ui_ok"] = True
         session["csrf"] = new_csrf_token()
@@ -593,7 +635,25 @@ def create_app(config: Optional[Config] = None) -> Flask:
             config.clear_tesla_token()
         else:
             return jsonify({"error": "unknown action"}), 400
+        # Any pending code pointed at the link that just went away.
+        config.clear_pairing_code()
         return jsonify({"ok": True, "tesla_url": config.tesla_url})
+
+    @app.post("/api/tesla-pair")
+    @login_required
+    def api_tesla_pair():
+        """Mint or cancel the short code the car types in instead of the link."""
+        action = (request.get_json(silent=True) or {}).get("action")
+        if action == "create":
+            if not config.tesla_token:
+                return jsonify({"error": "Create the Tesla link first."}), 400
+            config.new_pairing_code()
+        elif action == "cancel":
+            config.clear_pairing_code()
+        else:
+            return jsonify({"error": "unknown action"}), 400
+        return jsonify({"ok": True, "pairing_code": config.pairing_code,
+                        "pairing_expires_at": config.pairing_expires_at})
 
     # -- tesla page --------------------------------------------------------
     #
