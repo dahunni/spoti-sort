@@ -70,7 +70,7 @@
     }
     el("note").textContent = !now.addable
       ? "This track can't be added to a playlist."
-      : "Tap to add · tap a green one again to undo";
+      : "Tap to add · tap again to remove";
 
     targets.forEach(function (target) {
       var button = document.createElement("button");
